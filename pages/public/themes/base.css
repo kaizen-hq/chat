@@ -85,6 +85,7 @@ details summary {
   align-items: center;
   border-bottom: solid 2px transparent;
   border-top: solid 2px transparent;
+  position: relative;
 }
 
 .channel-item a {
@@ -95,9 +96,11 @@ details summary {
   display: flex;
   align-items: center;
   padding-left: .7rem;
+  padding-right: .7rem;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  transition: color var(--transition), background var(--transition);
 }
 
 .channel-item a:hover {
@@ -106,6 +109,22 @@ details summary {
 
 .channel-item.active a {
   color: var(--text-primary);
+  background: var(--bg-active);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+/* Left accent bar on selected channel */
+.channel-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 1.4rem;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
 }
 
 /* ── Channel + hub drag-and-drop reordering (desktop) ───────────────────── */
@@ -174,6 +193,7 @@ details summary {
 .dm-item {
   display: flex;
   align-items: center;
+  position: relative;
 }
 
 .dm-link {
@@ -203,6 +223,19 @@ details summary {
   font-weight: 600;
 }
 
+/* Left accent bar on selected DM — mirrors selected channel */
+.dm-item.dm-selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 1.4rem;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+
 .dm-name {
   flex: 1;
   overflow: hidden;
@@ -212,7 +245,16 @@ details summary {
 
 /* Unread dot on DM/channel items — blue for normal mentions, red for urgent.
    Uses data attributes instead of classes so rdbljs className re-renders
-   (which only touch el.className) never wipe the dot state. */
+   (which only touch el.className) never wipe the dot state.
+   Text is also brightened and bolded so the indicator is hard to miss. */
+.channel-item[data-mention] .channel-link,
+.channel-item[data-urgent] .channel-link,
+.dm-item[data-mention] .dm-link,
+.dm-item[data-urgent] .dm-link {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .dm-item[data-mention] .dm-link::after,
 .channel-item[data-mention] .channel-link::after {
   content: '';
