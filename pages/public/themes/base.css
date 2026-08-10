@@ -92,15 +92,19 @@ details summary {
   color: var(--text-secondary);
   text-decoration: none;
   flex: 1;
+  min-width: 0;
   height: 2.3rem;
-  display: flex;
-  align-items: center;
+  display: block;
+  line-height: 2.3rem;
   padding-left: .7rem;
   padding-right: .7rem;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   transition: color var(--transition), background var(--transition);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .channel-item a:hover {

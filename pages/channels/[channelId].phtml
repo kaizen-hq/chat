@@ -11,7 +11,7 @@
       <ul each="channels" key="channel_id" class="channel-list">
         <template>
           <li class="channel-item" cls="className" draggable="true">
-            <a attr="href:url" text="name" class="channel-link"
+            <a attr="href:url; title:name" text="name" class="channel-link"
                data-channel-id=""
                data-channel-name=""
                data-channel-topic=""
@@ -23,8 +23,9 @@
         </template>
       {{#each channels}}
         <li data-key="{{channel_id}}" class="channel-item {{className}}" cls="className" draggable="true">
-          <a attr="href:url" text="name" class="channel-link"
+          <a attr="href:url; title:name" text="name" class="channel-link"
              href="{{base}}/channels/{{channel_id}}"
+             title="{{name}}"
              data-channel-id="{{channel_id}}"
              data-channel-name="{{name}}"
              data-channel-topic="{{topic}}"
