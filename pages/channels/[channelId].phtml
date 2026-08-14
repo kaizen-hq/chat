@@ -158,8 +158,36 @@
     <textarea model="draft" id="message-input" placeholder="Message in {{channel.name}}" aria-label="Write a message"
       rows="1" onkeydown="handleComposerKey">
     </textarea>
+    <button onclick="toggleComposeMode" class="btn-compose-expand btn-icon" type="button"
+      title="Compose mode (Ctrl+E)" aria-label="Open compose mode">&#x26F6;</button>
     <button onclick="sendMessage" class="btn-send" aria-label="Send message" type="button">Send</button>
   </footer>
+
+  <!-- Compose overlay — full-panel editor with Write / Preview tabs -->
+  <div class="compose-overlay" id="compose-overlay" hidden>
+    <div class="compose-overlay-header">
+      <div class="compose-tabs" role="tablist">
+        <button class="compose-tab compose-tab--active" data-tab="write"
+          role="tab" aria-selected="true" type="button">Write</button>
+        <button class="compose-tab" data-tab="preview"
+          role="tab" aria-selected="false" type="button">Preview</button>
+      </div>
+      <button class="btn-compose-collapse btn-icon" id="btn-compose-collapse"
+        type="button" title="Collapse (Esc)" aria-label="Collapse compose mode">&#x2715;</button>
+    </div>
+    <div class="attachment-chips" id="compose-chips" hidden></div>
+    <textarea class="compose-textarea" id="compose-textarea"
+      placeholder="Write your message… (Ctrl+Enter to send)" aria-label="Compose message"></textarea>
+    <div class="compose-preview message-text" id="compose-preview" hidden aria-live="polite"></div>
+    <footer class="compose-overlay-footer">
+      <button class="btn-urgent-toggle" id="compose-urgent-toggle" type="button"
+        title="Toggle urgent mode" aria-label="Toggle urgent send">&#x1F514;</button>
+      <button class="btn-attach btn-icon" id="compose-attach" type="button"
+        title="Attach file" aria-label="Attach file">&#x1F4CE;</button>
+      <button class="btn-send" id="compose-send" type="button">Send</button>
+    </footer>
+  </div>
+
 </section><!-- /.chat-panel -->
 
 <!-- Tile panel: sibling of chat-panel, never inside it -->

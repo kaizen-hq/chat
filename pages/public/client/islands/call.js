@@ -583,31 +583,196 @@ export default function CallIsland(root) {
   }
 
   function renderChips() {
-    chipsEl.innerHTML = pendingAttachments.map((a, i) => `
+    const html = pendingAttachments.map((a, i) => `
       <span class="attachment-chip" data-index="${i}">
         <span class="attachment-chip-name">${escHtml(a.original_name)}</span>
         <button type="button" class="attachment-chip-remove" data-index="${i}" aria-label="Remove ${escHtml(a.original_name)}">×</button>
       </span>
     `).join('')
+    chipsEl.innerHTML = html
     chipsEl.hidden = pendingAttachments.length === 0
+    if (composeChipsEl) {
+      composeChipsEl.innerHTML = html
+      composeChipsEl.hidden = pendingAttachments.length === 0
+    }
+  }
+
+  function _removeChipAt(idx) {
+    pendingAttachments.splice(idx, 1)
+    renderChips()
   }
 
   chipsEl.addEventListener('click', e => {
     const btn = e.target.closest('.attachment-chip-remove')
     if (!btn) return
-    const idx = parseInt(btn.dataset.index, 10)
-    pendingAttachments.splice(idx, 1)
-    renderChips()
+    _removeChipAt(parseInt(btn.dataset.index, 10))
   })
 
   function showComposerError(msg) {
+    const target = composeOpen ? composeChipsEl : chipsEl
+    if (!target) return
     const chip = document.createElement('span')
     chip.className = 'attachment-chip attachment-chip-error'
     chip.textContent = msg
-    chipsEl.appendChild(chip)
-    chipsEl.hidden = false
+    target.appendChild(chip)
+    target.hidden = false
     setTimeout(() => chip.remove(), 5000)
   }
+
+  // ── Compose overlay ───────────────────────────────────────────────────────
+  const composeOverlayEl   = root.querySelector('#compose-overlay')
+  const composeTaEl        = document.getElementById('compose-textarea')
+  const composePreviewEl   = document.getElementById('compose-preview')
+  const composeCollapseBtn = document.getElementById('btn-compose-collapse')
+  const composeSendBtn     = document.getElementById('compose-send')
+  const composeUrgentBtn   = document.getElementById('compose-urgent-toggle')
+  const composeChipsEl     = document.getElementById('compose-chips')
+  const composeBtnAttach   = document.getElementById('compose-attach')
+
+  let composeOpen = false
+
+  function openComposeMode() {
+    if (composeOpen) return
+    composeOpen = true
+    if (composeTaEl) composeTaEl.value = draft()
+    messages.hidden = true
+    composerEl.hidden = true
+    if (composeOverlayEl) composeOverlayEl.hidden = false
+    _switchComposeTab('write')
+    requestAnimationFrame(() => {
+      if (!composeTaEl) return
+      composeTaEl.focus()
+      const len = composeTaEl.value.length
+      composeTaEl.setSelectionRange(len, len)
+    })
+  }
+
+  function closeComposeMode() {
+    if (!composeOpen) return
+    composeOpen = false
+    messages.hidden = false
+    composerEl.hidden = false
+    if (composeOverlayEl) composeOverlayEl.hidden = true
+    textareaEl?.focus()
+  }
+
+  function toggleComposeMode() {
+    composeOpen ? closeComposeMode() : openComposeMode()
+  }
+
+  function _switchComposeTab(tab) {
+    root.querySelectorAll('.compose-tab').forEach(btn => {
+      const active = btn.dataset.tab === tab
+      btn.classList.toggle('compose-tab--active', active)
+      btn.setAttribute('aria-selected', String(active))
+    })
+    if (composeTaEl) composeTaEl.hidden = tab !== 'write'
+    if (composePreviewEl) composePreviewEl.hidden = tab !== 'preview'
+    if (tab === 'preview') _renderComposePreview()
+  }
+
+  async function _renderComposePreview() {
+    const text = composeTaEl?.value ?? ''
+    if (!text.trim()) {
+      if (composePreviewEl) composePreviewEl.innerHTML = '<p style="color:var(--text-muted)">Nothing to preview yet.</p>'
+      return
+    }
+    try {
+      const res = await fetch(`${window.__BASE_PATH__}/api/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (res.ok) {
+        const { html } = await res.json()
+        if (composePreviewEl) composePreviewEl.innerHTML = sanitizeHtml(html)
+      }
+    } catch {
+      if (composePreviewEl) composePreviewEl.textContent = text
+    }
+  }
+
+  // Sync compose textarea → draft signal
+  composeTaEl?.addEventListener('input', () => { draft.set(composeTaEl.value) })
+
+  // Ctrl+Enter / Cmd+Enter in compose textarea → send and collapse
+  composeTaEl?.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      sendMessage()
+      closeComposeMode()
+    }
+  })
+
+  // Tab strip
+  root.querySelectorAll('.compose-tab').forEach(btn => {
+    btn.addEventListener('click', () => _switchComposeTab(btn.dataset.tab))
+  })
+
+  // Collapse, send, and attach buttons
+  composeCollapseBtn?.addEventListener('click', closeComposeMode)
+  composeSendBtn?.addEventListener('click', () => { sendMessage(); closeComposeMode() })
+  composeUrgentBtn?.addEventListener('click', () => toggleUrgentMode())
+  composeBtnAttach?.addEventListener('click', () => fileInputEl.click())
+  composeChipsEl?.addEventListener('click', e => {
+    const btn = e.target.closest('.attachment-chip-remove')
+    if (!btn) return
+    _removeChipAt(parseInt(btn.dataset.index, 10))
+  })
+
+  // Paste images into the compose textarea
+  composeTaEl?.addEventListener('paste', e => {
+    const items = [...(e.clipboardData?.items ?? [])]
+    const imageFiles = items
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+      .map(item => {
+        const file = item.getAsFile()
+        if (!file) return null
+        if (!file.name) {
+          const ext = item.type.split('/')[1] ?? 'png'
+          return new File([file], `paste-${Date.now()}.${ext}`, { type: item.type })
+        }
+        return file
+      })
+      .filter(Boolean)
+    if (imageFiles.length === 0) return
+    e.preventDefault()
+    uploadFiles(imageFiles)
+  })
+
+  // Drag-and-drop files onto the compose overlay
+  let composeDropOverlayEl = null
+  function ensureComposeDropOverlay() {
+    if (composeDropOverlayEl) return composeDropOverlayEl
+    composeDropOverlayEl = document.createElement('div')
+    composeDropOverlayEl.className = 'drop-overlay'
+    composeDropOverlayEl.textContent = 'Drop to attach'
+    composeOverlayEl?.appendChild(composeDropOverlayEl)
+    return composeDropOverlayEl
+  }
+  composeOverlayEl?.addEventListener('dragover', e => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    ensureComposeDropOverlay().hidden = false
+  })
+  composeOverlayEl?.addEventListener('dragleave', e => {
+    if (composeOverlayEl.contains(e.relatedTarget)) return
+    if (composeDropOverlayEl) composeDropOverlayEl.hidden = true
+  })
+  composeOverlayEl?.addEventListener('drop', e => {
+    e.preventDefault()
+    if (composeDropOverlayEl) composeDropOverlayEl.hidden = true
+    const files = [...(e.dataTransfer.files ?? [])]
+    if (files.length > 0) uploadFiles(files)
+  })
+
+  // Ctrl+E / Cmd+E anywhere to toggle compose mode
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+      e.preventDefault()
+      toggleComposeMode()
+    }
+  })
 
   // ── Urgent send ───────────────────────────────────────────────────────────
   const urgentMode = signal(false)
@@ -618,6 +783,8 @@ export default function CallIsland(root) {
   function toggleUrgentMode() {
     urgentMode.set(!urgentMode())
     composerFooter?.classList.toggle('composer-urgent', urgentMode())
+    composeOverlayEl?.classList.toggle('composer-urgent', urgentMode())
+    composeUrgentBtn?.classList.toggle('is-urgent', urgentMode())
   }
 
   function sendMessage({ priority } = {}) {
@@ -908,6 +1075,7 @@ export default function CallIsland(root) {
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
+      if (composeOpen) { closeComposeMode(); return }
       closeEmojiPicker()
     }
   })
@@ -1013,42 +1181,85 @@ export default function CallIsland(root) {
   // ── Inline edit ────────────────────────────────────────────────────────────
 
   function startInlineEdit(article) {
-    if (article.querySelector('.message-edit-input')) return // already editing
-    const textEl = article.querySelector('.message-text')
+    if (article.querySelector('.message-edit-wrap')) return
+    const textEl  = article.querySelector('.message-text')
     if (!textEl) return
     const rawText = article.dataset.rawText ?? ''
+
+    // Build the edit widget
+    const wrap = document.createElement('div')
+    wrap.className = 'message-edit-wrap'
+
+    const tabStrip = document.createElement('div')
+    tabStrip.className = 'message-edit-tabs'
+    tabStrip.setAttribute('role', 'tablist')
+    tabStrip.innerHTML = `
+      <button class="message-edit-tab message-edit-tab--active" data-tab="write" role="tab" aria-selected="true" type="button">Write</button>
+      <button class="message-edit-tab" data-tab="preview" role="tab" aria-selected="false" type="button">Preview</button>`
 
     const textarea = document.createElement('textarea')
     textarea.className = 'message-edit-input'
     textarea.value = rawText
-    textEl.replaceWith(textarea)
-    textarea.focus()
-    textarea.setSelectionRange(rawText.length, rawText.length)
+
+    const preview = document.createElement('div')
+    preview.className = 'message-edit-preview message-text'
+    preview.hidden = true
+    preview.setAttribute('aria-live', 'polite')
 
     const toolbar = document.createElement('div')
     toolbar.className = 'message-edit-toolbar'
-    toolbar.innerHTML = '<button class="btn-edit-save btn-primary" type="button">Save</button><button class="btn-edit-cancel btn-ghost" type="button">Cancel</button>'
-    textarea.after(toolbar)
+    toolbar.innerHTML = `
+      <span class="message-edit-hint">Ctrl+Enter to save · Esc to cancel</span>
+      <button class="btn-ghost btn-edit-cancel" type="button">Cancel</button>
+      <button class="btn-primary btn-edit-save" type="button">Save</button>`
+
+    wrap.append(tabStrip, textarea, preview, toolbar)
+    textEl.replaceWith(wrap)
+    textarea.focus()
+    textarea.setSelectionRange(rawText.length, rawText.length)
+
+    // Tab switching
+    tabStrip.addEventListener('click', async e => {
+      const btn = e.target.closest('.message-edit-tab')
+      if (!btn) return
+      const tab = btn.dataset.tab
+      tabStrip.querySelectorAll('.message-edit-tab').forEach(b => {
+        b.classList.toggle('message-edit-tab--active', b === btn)
+        b.setAttribute('aria-selected', String(b === btn))
+      })
+      textarea.hidden = tab !== 'write'
+      preview.hidden  = tab !== 'preview'
+      if (tab === 'preview') {
+        const text = textarea.value.trim()
+        if (!text) { preview.innerHTML = '<p style="color:var(--text-muted)">Nothing to preview yet.</p>'; return }
+        try {
+          const res = await fetch(`${window.__BASE_PATH__}/api/preview`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          })
+          if (res.ok) { const { html } = await res.json(); preview.innerHTML = sanitizeHtml(html) }
+        } catch { preview.textContent = text }
+      }
+    })
 
     function cancel() {
-      textarea.replaceWith(textEl)
-      toolbar.remove()
+      wrap.replaceWith(textEl)
     }
 
     function save() {
       const newText = textarea.value.trim()
-      if (!newText) { cancel(); return }
-      if (newText === rawText) { cancel(); return }
-      // Optimistic: show new text immediately (unrendered), server will push rendered version via msg.edited
+      if (!newText || newText === rawText) { cancel(); return }
       textEl.textContent = newText
       cancel()
+      article.dataset.rawText = newText
       ws.send({ t: 'msg.edit', body: { msg_id: article.dataset.msgId, channel_id: channelId, text: newText } })
     }
 
     toolbar.querySelector('.btn-edit-save').addEventListener('click', save)
     toolbar.querySelector('.btn-edit-cancel').addEventListener('click', cancel)
     textarea.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); save() }
       if (e.key === 'Escape') cancel()
     })
   }
@@ -1731,6 +1942,8 @@ export default function CallIsland(root) {
   document.addEventListener('chatpanel:navigated', (e) => {
     const { channelId: newId, name, topic, kind, seedSeq: newSeedSeq, seedFirstSeq: newFirstSeq, seedHasMore: newHasMore } = e.detail
 
+    if (composeOpen && newId !== channelId) closeComposeMode()
+
     // Morph strips dynamically-added content (reactions, attachments, timestamps, etc.)
     // but may preserve data-hydrated="1". Always clear and re-hydrate.
     for (const a of messages.querySelectorAll('article.message[data-hydrated]')) {
@@ -1811,5 +2024,5 @@ export default function CallIsland(root) {
 
   // ── Exports (rdbljs bindings) ──────────────────────────────────────────────
 
-  return { draft, channelName, channelTopic, urgentMode, urgentClass, sendMessage, handleComposerKey, toggleUrgentMode }
+  return { draft, channelName, channelTopic, urgentMode, urgentClass, sendMessage, handleComposerKey, toggleUrgentMode, toggleComposeMode }
 }
