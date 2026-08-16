@@ -145,8 +145,15 @@ export function handleAdminBotTokenRevoke(ws, msg, ctx) {
 }
 
 export function handleAdminBotSetChannels(ws, msg, ctx) {
-  const { botService, sendWs } = ctx
+  const { botService, sendWs, connections } = ctx
   const { user_id, channel_ids } = msg.body || {}
   botService.setBotChannels({ userId: user_id, channelIds: channel_ids, requestingUserId: ws.data.userId })
   sendWs(ws, { t: 'admin.bot_updated', reply_to: msg.id, ok: true, body: { user_id } })
+
+  // Notify the bot's active WebSocket connection so it can re-join channels.
+  for (const [, conn] of connections) {
+    if (conn.data.userId === user_id) {
+      sendWs(conn, { t: 'bot.channels_updated', body: { user_id } })
+    }
+  }
 }
