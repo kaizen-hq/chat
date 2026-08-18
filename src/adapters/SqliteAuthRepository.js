@@ -31,12 +31,12 @@ export class SqliteAuthRepository {
     this.db.prepare('DELETE FROM invites WHERE invite_id = ?').run(inviteId)
   }
 
-  /** Atomically: increment invite uses + insert user + insert session */
+  /** Atomically: increment invite uses + insert user (allow_local_auth=1) + insert session */
   registerUser({ inviteId, userId, handle, displayName, rolesJson, passwordHash, now, sessionId, sessionTokenHash, sessionExpiresAt }) {
     runTransaction(this.db, () => {
       this.db.prepare(
-        `INSERT INTO users (user_id, handle, display_name, roles_json, password_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO users (user_id, handle, display_name, roles_json, password_hash, created_at, allow_local_auth)
+         VALUES (?, ?, ?, ?, ?, ?, 1)`
       ).run(userId, handle, displayName, rolesJson, passwordHash, now)
       this.db.prepare(
         `UPDATE invites SET uses = uses + 1, redeemed_by_user_id = ? WHERE invite_id = ?`
@@ -48,12 +48,12 @@ export class SqliteAuthRepository {
     })
   }
 
-  /** Atomically: insert user + insert session (bootstrap — no invite to redeem) */
+  /** Atomically: insert user (allow_local_auth=1) + insert session (bootstrap — no invite) */
   registerBootstrapUser({ userId, handle, displayName, rolesJson, passwordHash, now, sessionId, sessionTokenHash, sessionExpiresAt }) {
     runTransaction(this.db, () => {
       this.db.prepare(
-        `INSERT INTO users (user_id, handle, display_name, roles_json, password_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO users (user_id, handle, display_name, roles_json, password_hash, created_at, allow_local_auth)
+         VALUES (?, ?, ?, ?, ?, ?, 1)`
       ).run(userId, handle, displayName, rolesJson, passwordHash, now)
       this.db.prepare(
         `INSERT INTO sessions (session_id, user_id, token_hash, created_at, expires_at, last_seen_at)
@@ -66,8 +66,47 @@ export class SqliteAuthRepository {
 
   findUserByHandle({ handle }) {
     return this.db.prepare(
-      'SELECT user_id, handle, display_name, roles_json, password_hash FROM users WHERE handle = ?'
+      'SELECT user_id, handle, display_name, roles_json, password_hash, allow_local_auth FROM users WHERE handle = ?'
     ).get(handle) ?? null
+  }
+
+  findUserByEmail({ email }) {
+    return this.db.prepare(
+      'SELECT user_id, handle, display_name, email FROM users WHERE email = ?'
+    ).get(email) ?? null
+  }
+
+  findUserByEntraOid({ oid }) {
+    return this.db.prepare(
+      'SELECT user_id, handle, display_name, roles_json FROM users WHERE entra_oid = ?'
+    ).get(oid) ?? null
+  }
+
+  findUserByActivationToken({ tokenHash }) {
+    return this.db.prepare(
+      'SELECT user_id, handle, display_name, roles_json FROM users WHERE activation_token_hash = ?'
+    ).get(tokenHash) ?? null
+  }
+
+  createEntraUser({ userId, handle, displayName, email, upn, entraOid, rolesJson, now }) {
+    this.db.prepare(
+      `INSERT INTO users (user_id, handle, display_name, roles_json, created_at, entra_oid, email, upn, allow_local_auth)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).run(userId, handle, displayName, rolesJson, now, entraOid, email, upn)
+  }
+
+  createEntraAdminPlaceholder({ userId, activationTokenHash, now }) {
+    const handle = `admin-${userId.slice(-6)}`
+    this.db.prepare(
+      `INSERT INTO users (user_id, handle, display_name, roles_json, created_at, allow_local_auth, activation_token_hash)
+       VALUES (?, ?, 'Admin', '["admin"]', ?, 0, ?)`
+    ).run(userId, handle, now, activationTokenHash)
+  }
+
+  bindEntraOid({ userId, oid, email, upn, displayName }) {
+    this.db.prepare(
+      `UPDATE users SET entra_oid = ?, email = ?, upn = ?, display_name = ?, activation_token_hash = NULL WHERE user_id = ?`
+    ).run(oid, email, upn, displayName, userId)
   }
 
   findUserById({ userId }) {
@@ -78,7 +117,7 @@ export class SqliteAuthRepository {
 
   listUsers() {
     return this.db.prepare(
-      `SELECT user_id, handle, display_name, roles_json, created_at FROM users ORDER BY created_at ASC`
+      `SELECT user_id, handle, display_name, roles_json, email, created_at FROM users ORDER BY created_at ASC`
     ).all()
   }
 
@@ -104,11 +143,11 @@ export class SqliteAuthRepository {
 
   // ── Sessions ───────────────────────────────────────────────────────────────
 
-  insertSession({ sessionId, userId, tokenHash, now, expiresAt }) {
+  insertSession({ sessionId, userId, tokenHash, now, expiresAt, accessToken = null, refreshToken = null }) {
     this.db.prepare(
-      `INSERT INTO sessions (session_id, user_id, token_hash, created_at, expires_at, last_seen_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(sessionId, userId, tokenHash, now, expiresAt, now)
+      `INSERT INTO sessions (session_id, user_id, token_hash, created_at, expires_at, last_seen_at, access_token, refresh_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(sessionId, userId, tokenHash, now, expiresAt, now, accessToken, refreshToken)
   }
 
   findSessionWithUser({ tokenHash }) {
@@ -117,6 +156,12 @@ export class SqliteAuthRepository {
        FROM sessions s JOIN users u ON u.user_id = s.user_id
        WHERE s.token_hash = ?`
     ).get(tokenHash) ?? null
+  }
+
+  findSessionTokens({ sessionId }) {
+    return this.db.prepare(
+      'SELECT access_token, refresh_token FROM sessions WHERE session_id = ?'
+    ).get(sessionId) ?? null
   }
 
   touchSession({ sessionId, now }) {

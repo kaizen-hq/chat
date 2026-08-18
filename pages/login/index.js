@@ -1,4 +1,4 @@
-import { auth, sessionFromRequest, sessionCookie } from '../../src/context.js'
+import { auth, sessionFromRequest, sessionCookie, isEntraConfigured } from '../../src/context.js'
 import { p } from '../../src/config.js'
 
 export async function GET(req) {
@@ -8,7 +8,7 @@ export async function GET(req) {
   const url = new URL(req.url)
   const inviteToken = url.searchParams.get('invite') ?? ''
   const shouldShowSignup = !!inviteToken
-  return { error: null, shouldShowSignup, invite_token: inviteToken }
+  return { error: null, shouldShowSignup, invite_token: inviteToken, entraConfigured: isEntraConfigured() }
 }
 
 export async function POST(req) {

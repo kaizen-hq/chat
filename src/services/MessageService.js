@@ -1,6 +1,7 @@
 import { newId } from '../util/ids.js'
 import { ServiceError } from '../util/errors.js'
 import { validateEditPermission, validateEditText, assertMessageEditable, validateDeletePermission } from '../core/messages.js'
+import { validateMessageKind } from '../core/pmDoc.js'
 
 export class MessageService {
   constructor({ messageRepo, nowFn = () => Date.now(), channelService, searchService, uploadService = null, reactionService = null }) {
@@ -16,10 +17,16 @@ export class MessageService {
     this.uploadService = uploadService
   }
 
-  sendMessage({ channelId, userId, text, clientMsgId = null, priority = 'normal', attachments = [] }) {
+  sendMessage({ channelId, userId, text, clientMsgId = null, priority = 'normal', attachments = [], kind = 'text', content_json = null, replyTo = null }) {
     if (!this.channelService.isMember(channelId, userId)) throw new ServiceError('FORBIDDEN', 'Not a member of channel')
     if (!text?.trim() && attachments.length === 0) throw new ServiceError('BAD_REQUEST', 'Message text or attachment required')
     if (!['normal', 'async', 'now'].includes(priority)) throw new ServiceError('BAD_REQUEST', 'Invalid priority')
+
+    validateMessageKind({ kind, content_json, text })
+
+    if (replyTo && !this.messageRepo.existsInChannel({ channelId, msgId: replyTo })) {
+      throw new ServiceError('INVALID_REPLY_TO', 'Reply target message not found in this channel')
+    }
 
     const msgId = newId('m')
     const now = this.nowFn()
@@ -28,7 +35,7 @@ export class MessageService {
     const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : null
 
     const { seq } = this.messageRepo.insertMessage({
-      msgId, channelId, userId, now, text: trimmed, clientMsgId, priority, attachmentsJson
+      msgId, channelId, userId, now, text: trimmed, clientMsgId, priority, attachmentsJson, kind, contentJson: content_json, replyTo
     })
 
     if (trimmed) {

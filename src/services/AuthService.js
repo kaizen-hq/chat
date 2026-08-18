@@ -1,16 +1,18 @@
 import { newId } from '../util/ids.js'
 import { randomToken, hashToken, hashPassword, verifyPassword } from '../util/crypto.js'
 import { ServiceError } from '../util/errors.js'
+import { decryptToken } from '../util/tokenCipher.js'
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 export class AuthService {
-  constructor({ authRepo, nowFn = () => Date.now(), sessionTtlMs = DEFAULT_SESSION_TTL_MS, bootstrapToken = null }) {
+  constructor({ authRepo, nowFn = () => Date.now(), sessionTtlMs = DEFAULT_SESSION_TTL_MS, bootstrapToken = null, encryptionKey = null }) {
     this.authRepo = authRepo
     this.nowFn = nowFn
     this.sessionTtlMs = sessionTtlMs
     this.bootstrapToken = bootstrapToken
+    this.encryptionKey = encryptionKey
   }
 
   createInvite({ createdByUserId, ttlMs = DEFAULT_TTL_MS, maxUses = 1, note = null, roles = ['user'] }) {
@@ -95,6 +97,7 @@ export class AuthService {
     if (!handle || !password) throw new ServiceError('BAD_REQUEST', 'Handle and password required')
     const row = this.authRepo.findUserByHandle({ handle })
     if (!row || !row.password_hash) throw new ServiceError('AUTH_FAILED', 'Invalid handle or password')
+    if (!row.allow_local_auth) throw new ServiceError('AUTH_FAILED', 'Local authentication is not enabled for this account')
     const isValid = await verifyPassword(password, row.password_hash)
     if (!isValid) throw new ServiceError('AUTH_FAILED', 'Invalid handle or password')
     const now = this.nowFn()
@@ -104,6 +107,56 @@ export class AuthService {
       sessionToken,
       user: { user_id: row.user_id, handle: row.handle, display_name: row.display_name, roles: JSON.parse(row.roles_json) }
     }
+  }
+
+  // ── Entra OIDC ──────────────────────────────────────────────────────────────
+
+  async signInWithEntra({ oid, email, upn, displayName, accessToken = null, refreshToken = null }) {
+    if (!oid) throw new ServiceError('BAD_REQUEST', 'Entra OID is required')
+    const now = this.nowFn()
+    const row = this.authRepo.findUserByEntraOid({ oid })
+    let user
+    if (row) {
+      user = { user_id: row.user_id, handle: row.handle, display_name: row.display_name, roles: JSON.parse(row.roles_json) }
+    } else {
+      const handle = this._deriveHandle(upn ?? email ?? oid)
+      const userId = newId('u')
+      this.authRepo.createEntraUser({ userId, handle, displayName: displayName ?? handle, email, upn, entraOid: oid, rolesJson: JSON.stringify(['user']), now })
+      user = { user_id: userId, handle, display_name: displayName ?? handle, roles: ['user'] }
+    }
+    const { sessionId, sessionToken, expiresAt } = this._makeSessionParts(now)
+    this.authRepo.insertSession({ sessionId, userId: user.user_id, tokenHash: hashToken(sessionToken), now, expiresAt, accessToken, refreshToken })
+    return { sessionToken, user }
+  }
+
+  createEntraAdminPlaceholder() {
+    if (this.authRepo.getUserCount() > 0) return null
+    const activationToken = randomToken(24)
+    const userId = newId('u')
+    const now = this.nowFn()
+    this.authRepo.createEntraAdminPlaceholder({ userId, activationTokenHash: hashToken(activationToken), now })
+    return activationToken
+  }
+
+  async activateEntraAdmin({ activationToken, oid, email, upn, displayName, accessToken = null, refreshToken = null }) {
+    const user = this.authRepo.findUserByActivationToken({ tokenHash: hashToken(activationToken) })
+    if (!user) throw new ServiceError('AUTH_FAILED', 'Activation token is invalid or already used')
+    const now = this.nowFn()
+    this.authRepo.bindEntraOid({ userId: user.user_id, oid, email, upn, displayName: displayName ?? user.display_name })
+    const { sessionId, sessionToken, expiresAt } = this._makeSessionParts(now)
+    this.authRepo.insertSession({ sessionId, userId: user.user_id, tokenHash: hashToken(sessionToken), now, expiresAt, accessToken, refreshToken })
+    return {
+      sessionToken,
+      user: { user_id: user.user_id, handle: user.handle, display_name: displayName ?? user.display_name, roles: JSON.parse(user.roles_json) }
+    }
+  }
+
+  _deriveHandle(upn) {
+    const base = (upn ?? '').split('@')[0].toLowerCase().replace(/[^a-z0-9_.-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'user'
+    if (!this.authRepo.isHandleTaken({ handle: base })) return base
+    let i = 2
+    while (this.authRepo.isHandleTaken({ handle: `${base}-${i}` })) i++
+    return `${base}-${i}`
   }
 
   createSession(userId) {
@@ -176,6 +229,10 @@ export class AuthService {
     return { user_id: row.user_id, handle: row.handle, display_name: row.display_name, roles: JSON.parse(row.roles_json) }
   }
 
+  findUserByEmail(email) {
+    return this.authRepo.findUserByEmail({ email }) ?? null
+  }
+
   findInvite(inviteToken) {
     return this.authRepo.findInviteByTokenHash({ tokenHash: hashToken(inviteToken) })
   }
@@ -185,8 +242,23 @@ export class AuthService {
       user_id:      row.user_id,
       handle:       row.handle,
       display_name: row.display_name,
+      email:        row.email ?? null,
       roles:        JSON.parse(row.roles_json),
     }))
+  }
+
+  searchUsers({ query, excludeUserId = null }) {
+    const q = query.toLowerCase().trim()
+    if (!q) return []
+    return this.listUsersBasic()
+      .filter(u => {
+        if (u.roles.includes('bot')) return false
+        if (excludeUserId && u.user_id === excludeUserId) return false
+        return u.handle.toLowerCase().includes(q)
+          || u.display_name.toLowerCase().includes(q)
+          || (u.email ?? '').toLowerCase().includes(q)
+      })
+      .slice(0, 10)
   }
 
   getDefaultRoles() { return ['user'] }
@@ -197,6 +269,21 @@ export class AuthService {
 
   isHandleTaken(handle) {
     return this.authRepo.isHandleTaken({ handle })
+  }
+
+  /**
+   * Retrieve and decrypt the Graph API tokens stored in a session.
+   * Returns null if the session doesn't exist.
+   * @param {{ sessionId: string }} opts
+   * @returns {{ accessToken: string|null, refreshToken: string|null }|null}
+   */
+  getSessionTokens({ sessionId }) {
+    const row = this.authRepo.findSessionTokens({ sessionId })
+    if (!row) return null
+    return {
+      accessToken:  row.access_token  ? decryptToken(row.access_token,  this.encryptionKey) : null,
+      refreshToken: row.refresh_token ? decryptToken(row.refresh_token, this.encryptionKey) : null,
+    }
   }
 
   _makeSessionParts(now) {

@@ -1,14 +1,18 @@
 export class InMemoryMessageRepository {
   constructor() {
-    this._messages = [] // { msg_id, channel_id, seq, user_id, user_handle, ts, text, client_msg_id, deleted_at, edited_at }
+    this._messages = [] // { msg_id, channel_id, seq, user_id, user_handle, ts, text, kind, content_json, client_msg_id, deleted_at, edited_at }
     this._seqs = new Map() // channelId → current max seq
   }
 
-  insertMessage({ msgId, channelId, userId, now, text, clientMsgId }) {
+  insertMessage({ msgId, channelId, userId, now, text, clientMsgId, kind = 'text', contentJson = null, replyTo = null }) {
     const seq = (this._seqs.get(channelId) ?? 0) + 1
     this._seqs.set(channelId, seq)
-    this._messages.push({ msg_id: msgId, channel_id: channelId, seq, user_id: userId, user_handle: userId, ts: now, text, client_msg_id: clientMsgId, deleted_at: null, edited_at: null })
+    this._messages.push({ msg_id: msgId, channel_id: channelId, seq, user_id: userId, user_handle: userId, ts: now, text, kind, content_json: contentJson, client_msg_id: clientMsgId, reply_to: replyTo ?? null, deleted_at: null, edited_at: null })
     return { seq }
+  }
+
+  existsInChannel({ channelId, msgId }) {
+    return this._messages.some(m => m.msg_id === msgId && m.channel_id === channelId && m.deleted_at == null)
   }
 
   getById(msgId) {
@@ -30,6 +34,6 @@ export class InMemoryMessageRepository {
       .filter(m => m.channel_id === channelId && m.seq > afterSeq && m.deleted_at == null)
       .sort((a, b) => a.seq - b.seq)
       .slice(0, limit)
-      .map(m => ({ msg_id: m.msg_id, seq: m.seq, user_id: m.user_id, user_handle: m.user_handle, ts: m.ts, text: m.text, edited_at: m.edited_at ?? null }))
+      .map(m => ({ msg_id: m.msg_id, seq: m.seq, user_id: m.user_id, user_handle: m.user_handle, ts: m.ts, text: m.text, kind: m.kind ?? 'text', content_json: m.content_json ?? null, reply_to: m.reply_to ?? null, edited_at: m.edited_at ?? null }))
   }
 }

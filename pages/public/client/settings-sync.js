@@ -37,12 +37,14 @@ export function patchSettings(patch) {
 }
 
 // Push local state to server (fire-and-forget)
+// keepalive: true ensures the request survives page navigation/refresh
 async function syncToServer(settings, updated_at) {
   try {
     await fetch(`${BASE_PATH}/api/user/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings, updated_at }),
+      keepalive: true,
     })
   } catch {
     // Network failure — local state is still correct, server syncs on next load

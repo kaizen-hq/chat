@@ -5,7 +5,9 @@ import { initDb } from './src/db/initDb.js'
 import { runMigrations } from './src/db/runMigrations.js'
 import { createLogger } from './src/util/logger.js'
 import { ChatServer } from './src/ws/ChatServer.js'
-import { init as initContext, sessionFromRequest } from './src/context.js'
+import { init as initContext, sessionFromRequest, isEntraConfigured } from './src/context.js'
+import { EntraAdapter } from './src/adapters/EntraAdapter.js'
+import { MeshGitAdapter } from './src/adapters/MeshGitAdapter.js'
 import { UserSettingsService } from './src/services/UserSettingsService.js'
 import { SqliteUserSettingsRepository } from './src/adapters/SqliteUserSettingsRepository.js'
 import { UploadService } from './src/services/UploadService.js'
@@ -40,6 +42,24 @@ async function _setupServices(config = {}) {
   })
   chat.messageService.setUploadService(uploadService)
 
+  const entraAdapter = isEntraConfigured()
+    ? new EntraAdapter({
+        tenantId: process.env.AZURE_TENANT_ID,
+        clientId: process.env.AZURE_CLIENT_ID,
+        clientSecret: process.env.AZURE_CLIENT_SECRET,
+        redirectUri: process.env.AZURE_REDIRECT_URI,
+      })
+    : null
+
+  const meshGitAdapter = process.env.MESH_BASE_URL
+    ? new MeshGitAdapter({ baseUrl: process.env.MESH_BASE_URL })
+    : null
+
+  // Wire mesh adapter into DocumentService if available
+  if (meshGitAdapter && chat.documentService) {
+    chat.documentService.meshGitAdapter = meshGitAdapter
+  }
+
   initContext({
     auth: chat.auth,
     hubService: chat.hubService,
@@ -53,7 +73,10 @@ async function _setupServices(config = {}) {
     userSettingsService,
     uploadService,
     reactionService: chat.reactionService,
+    meetingService: chat.meetingService,
+    documentService: chat.documentService,
     logger,
+    entraAdapter,
   })
 
   return { chat, db, logger, p, basePath, dev }

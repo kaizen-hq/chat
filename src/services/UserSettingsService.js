@@ -1,4 +1,4 @@
-const ALLOWED_KEYS = new Set(['last_channel_id', 'mobile_chat_open'])
+const ALLOWED_KEYS = new Set(['last_channel_id', 'mobile_chat_open', 'avatar_chars', 'avatar_color'])
 
 export class UserSettingsService {
   constructor({ userSettingsRepo }) {

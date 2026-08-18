@@ -129,7 +129,7 @@ openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 365 \
   -keyout certs/dev-key.pem \
   -out certs/dev-cert.pem \
   -subj "/CN=joey-mac-mini.local" \
-  -addext "subjectAltName = IP:192.168.1.10"
+  -addext "subjectAltName = IP:192.168.1.14"
 ```
 
 The server looks for `certs/dev-cert.pem` and `certs/dev-key.pem` by default. You can override the paths with `TLS_CERT` and `TLS_KEY` environment variables (see below).

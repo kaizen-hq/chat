@@ -1,6 +1,6 @@
 import { runTransaction } from '../db/transaction.js'
 
-const MSG_COLS = `m.msg_id, m.seq, m.user_id, u.display_name AS user_display_name, m.ts, m.text, m.edited_at, m.attachments_json`
+const MSG_COLS = `m.msg_id, m.seq, m.user_id, u.display_name AS user_display_name, m.ts, m.text, m.kind, m.content_json, m.reply_to, m.edited_at, m.attachments_json`
 
 export class SqliteMessageRepository {
   constructor({ db }) {
@@ -11,14 +11,20 @@ export class SqliteMessageRepository {
    * Atomically allocates the next seq, inserts the message and an audit event.
    * Returns { seq }.
    */
-  insertMessage({ msgId, channelId, userId, now, text, clientMsgId, priority = 'normal', attachmentsJson = null }) {
+  existsInChannel({ channelId, msgId }) {
+    return !!this.db.prepare(
+      'SELECT 1 FROM messages WHERE msg_id = ? AND channel_id = ? AND deleted_at IS NULL'
+    ).get(msgId, channelId)
+  }
+
+  insertMessage({ msgId, channelId, userId, now, text, clientMsgId, priority = 'normal', attachmentsJson = null, kind = 'text', contentJson = null, replyTo = null }) {
     return runTransaction(this.db, () => {
       const row = this.db.prepare('SELECT MAX(seq) AS max_seq FROM messages WHERE channel_id = ?').get(channelId)
       const seq = (row?.max_seq || 0) + 1
 
       this.db.prepare(
-        `INSERT INTO messages (msg_id, channel_id, seq, user_id, ts, text, client_msg_id, priority, attachments_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(msgId, channelId, seq, userId, now, text, clientMsgId, priority, attachmentsJson)
+        `INSERT INTO messages (msg_id, channel_id, seq, user_id, ts, text, client_msg_id, priority, attachments_json, kind, content_json, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(msgId, channelId, seq, userId, now, text, clientMsgId, priority, attachmentsJson, kind, contentJson, replyTo ?? null)
 
       this.db.prepare(
         `INSERT INTO events (ts, actor_user_id, scope_kind, scope_id, type, body_json)
@@ -39,6 +45,8 @@ export class SqliteMessageRepository {
       ...r,
       attachments: r.attachments_json ? JSON.parse(r.attachments_json) : [],
       attachments_json: undefined,
+      kind: r.kind ?? 'text',
+      content_json: r.content_json ?? null,
     }))
   }
 
@@ -53,6 +61,8 @@ export class SqliteMessageRepository {
       ...r,
       attachments: r.attachments_json ? JSON.parse(r.attachments_json) : [],
       attachments_json: undefined,
+      kind: r.kind ?? 'text',
+      content_json: r.content_json ?? null,
     }))
   }
 
@@ -85,6 +95,8 @@ export class SqliteMessageRepository {
       ...r,
       attachments: r.attachments_json ? JSON.parse(r.attachments_json) : [],
       attachments_json: undefined,
+      kind: r.kind ?? 'text',
+      content_json: r.content_json ?? null,
     }))
   }
 }

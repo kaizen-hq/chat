@@ -1,4 +1,4 @@
-import { sessionFromRequest, channelService, hubService, messageService, reactionService, auth, logger } from '../../src/context.js'
+import { sessionFromRequest, channelService, hubService, messageService, reactionService, auth, logger, meetingService, userSettingsService } from '../../src/context.js'
 import { renderMarkdown } from '@devchitchat/index97/markdown'
 import { p, BASE_PATH } from '../../src/config.js'
 
@@ -68,6 +68,20 @@ export async function GET(req) {
       }))
   }))
 
+  // For meeting channels, enrich with meeting_meta fields.
+  // ended_at reflects whether the current active phase is closed:
+  //   - If there's a segment with no ended_at → the meeting is still active (null)
+  //   - Otherwise → use the root meeting's ended_at
+  let meetingMeta = null
+  if (channel.kind === 'meeting' && meetingService) {
+    const meta = meetingService.meetingRepo.findById({ channelId })
+    if (meta) {
+      const segments = meetingService.meetingRepo.listSegments({ channelId })
+      const hasActiveSegment = segments.some(s => !s.ended_at)
+      meetingMeta = { ended_at: hasActiveSegment ? null : (meta.ended_at ?? null) }
+    }
+  }
+
   // For DM channels, replace the internal name with the other person's display name
   if (channel.kind === 'dm') {
     const otherUserId = channel.name.split(':').slice(1).find(id => id !== user.user_id)
@@ -75,8 +89,12 @@ export async function GET(req) {
     channel = { ...channel, name: otherUser?.display_name ?? 'Direct Message', topic: null }
   }
 
+  const userSettings = userSettingsService ? userSettingsService.getSettings(user.user_id).settings : {}
+
   return {
     user,
+    avatarChars: userSettings.avatar_chars ?? '',
+    avatarColor: userSettings.avatar_color != null ? String(userSettings.avatar_color) : '',
     isAdmin: user.roles?.includes('admin') ?? false,
     channel,
     currentChannelId: channelId,
@@ -95,5 +113,6 @@ export async function GET(req) {
     })),
     seedSeq,
     hubs: hubsWithChannels,
+    meetingMeta,
   }
 }

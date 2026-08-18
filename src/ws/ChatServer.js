@@ -21,15 +21,24 @@ import { SqliteSearchRepository } from '../adapters/SqliteSearchRepository.js'
 import { SqliteSignalingRepository } from '../adapters/SqliteSignalingRepository.js'
 import { handleHello, handleInviteRedeem, handleSignIn, handleSignOut, handleAdminInviteCreate, handleAdminInviteList, handleAdminInviteRevoke, handleAdminUserList, handleAdminUserSetRoles, handleAdminUserSetPassword, handleAdminUserSetDisplayName, handleAdminBotCreate, handleAdminBotList, handleAdminBotTokenCreate, handleAdminBotTokenRevoke, handleAdminBotSetChannels } from './handlers/authHandlers.js'
 import { handleHubList, handleHubCreate, handleHubUpdate, handleHubDelete, handleHubAddMember, handleHubRemoveMember, handleHubListMembers, handleHubReorder } from './handlers/hubHandlers.js'
-import { handleChannelList, handleChannelCreate, handleChannelUpdate, handleChannelDelete, handleChannelJoin, handleChannelLeave, handleChannelReorder, handleChannelAddMember, handleChannelRemoveMember, handleChannelListMembers, handleUserList, handleBotList, handleDmOpen, handleDmList } from './handlers/channelHandlers.js'
+import { handleChannelList, handleChannelCreate, handleChannelUpdate, handleChannelDelete, handleChannelJoin, handleChannelLeave, handleChannelReorder, handleChannelAddMember, handleChannelRemoveMember, handleChannelListMembers, handleUserList, handleUserSearch, handleBotList, handleDmOpen, handleDmList, handleUserAvatarUpdated } from './handlers/channelHandlers.js'
 import { handleMsgSend, handleMsgList, handleMsgEdit, handleMsgDelete, handleSearchQuery, handlePresenceSubscribe } from './handlers/messageHandlers.js'
 import { handleRtcCallCreate, handleRtcJoin, handleRtcOffer, handleRtcAnswer, handleRtcIce, handleRtcStreamPublish, handleRtcLeave, handleRtcEndCall } from './handlers/rtcHandlers.js'
 import { handlePushSubscribe, handlePushUnsubscribe } from './handlers/pushHandlers.js'
 import { handleReactionAdd, handleReactionRemove } from './handlers/reactionHandlers.js'
+import { handleMeetingCreate, handleMeetingClose, handleMeetingContinue, handleMeetingSchedule, handleMeetingList, handleMeetingInvite } from './handlers/meetingHandlers.js'
+import { handleDocPin, handleDocUnpin, handleDocList } from './handlers/docHandlers.js'
+import { MeetingService } from '../services/MeetingService.js'
+import { SqliteMeetingRepository } from '../adapters/SqliteMeetingRepository.js'
+import { DocumentService } from '../services/DocumentService.js'
+import { SqliteDocumentRepository } from '../adapters/SqliteDocumentRepository.js'
+import { loadEncryptionKey } from '../util/tokenCipher.js'
 import { WebPushService } from '../services/WebPushService.js'
 import { SqlitePushRepository } from '../adapters/SqlitePushRepository.js'
 import { SqliteReactionRepository } from '../adapters/SqliteReactionRepository.js'
 import { ReactionService } from '../services/ReactionService.js'
+import { UserSettingsService } from '../services/UserSettingsService.js'
+import { SqliteUserSettingsRepository } from '../adapters/SqliteUserSettingsRepository.js'
 
 /**
  * ChatServer — Bun native WebSocket implementation.
@@ -67,7 +76,8 @@ export class ChatServer {
     const reactionRepo  = new SqliteReactionRepository({ db })
 
     // ── Services ───────────────────────────────────────────────────────────────
-    this.auth             = new AuthService({ authRepo, sessionTtlMs: Number(process.env.SESSION_TTL_MS ?? 30 * 24 * 60 * 60 * 1000) })
+    const encryptionKey = loadEncryptionKey(process.env.SESSION_ENCRYPTION_KEY)
+    this.auth             = new AuthService({ authRepo, sessionTtlMs: Number(process.env.SESSION_TTL_MS ?? 30 * 24 * 60 * 60 * 1000), encryptionKey })
     this.hubService       = new HubService({ hubRepo })
     this.channelService   = new ChannelService({ channelRepo, hubService: this.hubService })
     this.searchService    = new SearchService({ searchRepo })
@@ -85,6 +95,9 @@ export class ChatServer {
       pushRepo,
     })
     this.pushRepo = pushRepo
+    this.meetingService      = new MeetingService({ meetingRepo: new SqliteMeetingRepository({ db }), channelService: this.channelService, authService: this.auth })
+    this.documentService     = new DocumentService({ documentRepo: new SqliteDocumentRepository({ db }), hubService: this.hubService, channelService: this.channelService })
+    this.userSettingsService = new UserSettingsService({ userSettingsRepo: new SqliteUserSettingsRepository({ db }) })
 
     // ── Connection state ───────────────────────────────────────────────────────
     this.connections    = new Map()  // connectionId → ws
@@ -216,6 +229,8 @@ export class ChatServer {
       case 'channel.list_members':       return handleChannelListMembers(ws, msg, ctx)
       // Users & DMs
       case 'user.list':                  return handleUserList(ws, msg, ctx)
+      case 'user.search':                return handleUserSearch(ws, msg, ctx)
+      case 'user.avatar_updated':        return handleUserAvatarUpdated(ws, msg, ctx)
       case 'bot.list':                   return handleBotList(ws, msg, ctx)
       case 'dm.open':                    return handleDmOpen(ws, msg, ctx)
       case 'dm.list':                    return handleDmList(ws, msg, ctx)
@@ -241,6 +256,17 @@ export class ChatServer {
       // Reactions
       case 'reaction.add':               return handleReactionAdd(ws, msg, ctx)
       case 'reaction.remove':            return handleReactionRemove(ws, msg, ctx)
+      // Meetings
+      case 'meeting.create':             return handleMeetingCreate(ws, msg, ctx)
+      case 'meeting.close':              return handleMeetingClose(ws, msg, ctx)
+      case 'meeting.continue':           return handleMeetingContinue(ws, msg, ctx)
+      case 'meeting.schedule':           return handleMeetingSchedule(ws, msg, ctx)
+      case 'meeting.list':               return handleMeetingList(ws, msg, ctx)
+      case 'meeting.invite':             return handleMeetingInvite(ws, msg, ctx)
+      // Pinned documents
+      case 'doc.pin':                    return handleDocPin(ws, msg, ctx)
+      case 'doc.unpin':                  return handleDocUnpin(ws, msg, ctx)
+      case 'doc.list':                   return handleDocList(ws, msg, ctx)
       default:
         this.#sendWs(ws, { t: 'error', ok: false, reply_to: msg.id, body: { code: 'BAD_REQUEST', message: 'Unknown message type' } })
     }
@@ -265,6 +291,9 @@ export class ChatServer {
       pushService:         this.pushService,
       pushRepo:            this.pushRepo,
       reactionService:     this.reactionService,
+      meetingService:      this.meetingService,
+      documentService:     this.documentService,
+      userSettingsService: this.userSettingsService,
       // Connection state (mutable references)
       connections:         this.connections,
       peerConnections:     this.peerConnections,
@@ -274,6 +303,7 @@ export class ChatServer {
       publishChannel:            (channelId, p)     => this.#publishChannel(channelId, p),
       publishCall:               (callId, p)        => this.#publishCall(callId, p),
       publishCallState:          (chId, callId, ps) => this.#publishCallState(chId, callId, ps),
+      broadcastToAll:            (p, ex)            => this.#broadcastToAll(p, ex),
       broadcastToHubAudience:    (hubId, p, ex)     => this.#broadcastToHubAudience(hubId, p, ex),
       broadcastToChannelAudience:(chId, p, ex)      => this.#broadcastToChannelAudience(chId, p, ex),
       collectHubAudience:        (hubId, ex)        => this.#collectHubAudience(hubId, ex),
@@ -401,6 +431,13 @@ export class ChatServer {
     return audience
   }
 
+  #broadcastToAll(payload, excludeWs = null) {
+    for (const [, ws] of this.connections) {
+      if (!ws.data.userId || ws === excludeWs) continue
+      this.#sendWs(ws, payload)
+    }
+  }
+
   #broadcastToHubAudience(hubId, payload, excludeWs = null) {
     const hub = this.hubService.getHub(hubId)
     if (!hub || hub.deleted_at) return
@@ -469,9 +506,21 @@ export class ChatServer {
 
   #ensureBootstrap() {
     if (this.auth.getUserCount() > 0) return
-    const token = process.env.BOOTSTRAP_TOKEN || randomToken(18)
-    this.auth.bootstrapToken = token
-    this.logger.info('auth.bootstrap_ready', { bootstrap_code: token })
+    const entraConfigured = !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET && process.env.AZURE_REDIRECT_URI)
+    if (entraConfigured) {
+      const activationToken = this.auth.createEntraAdminPlaceholder()
+      if (activationToken) {
+        const redirectUri = process.env.AZURE_REDIRECT_URI ?? ''
+        const base = redirectUri.replace(/\/auth\/callback.*$/, '')
+        this.logger.info('auth.entra_bootstrap_ready', {
+          activation_url: `${base}/auth/entra?activate=${encodeURIComponent(activationToken)}`,
+        })
+      }
+    } else {
+      const token = process.env.BOOTSTRAP_TOKEN || randomToken(18)
+      this.auth.bootstrapToken = token
+      this.logger.info('auth.bootstrap_ready', { bootstrap_code: token })
+    }
   }
 
   /** Called by index.js after Bun.serve() returns, so publish works */

@@ -5,20 +5,26 @@ import { renderMarkdown } from '@devchitchat/index97/markdown'
 
 export function handleMsgSend(ws, msg, ctx) {
   const { messageService, deliveryService, sendWs, publishChannel, dispatchMentions } = ctx
-  const { channel_id, text, client_msg_id, priority, attachments } = msg.body || {}
+  const { channel_id, text, client_msg_id, priority, attachments, kind, content_json, reply_to } = msg.body || {}
   const result = messageService.sendMessage({
     channelId: channel_id, userId: ws.data.userId, text, clientMsgId: client_msg_id, priority,
-    attachments: Array.isArray(attachments) ? attachments : []
+    attachments: Array.isArray(attachments) ? attachments : [],
+    kind: kind ?? 'text', content_json: content_json ?? null,
+    replyTo: reply_to ?? null,
   })
 
   sendWs(ws, { t: 'msg.ack', reply_to: msg.id, ok: true, body: { msg_id: result.msg_id, seq: result.seq, client_msg_id, priority: result.priority } })
+
+  const rendered_text = (kind === 'pm') ? null : renderMarkdown(text).html
 
   publishChannel(channel_id, {
     t: 'msg.event', ok: true,
     body: {
       msg_id: result.msg_id, channel_id, seq: result.seq,
       user_id: ws.data.userId, user_display_name: ws.data.displayName,
-      ts: result.ts, text, rendered_text: renderMarkdown(text).html,
+      ts: result.ts, text, rendered_text,
+      kind: kind ?? 'text', content_json: content_json ?? null,
+      reply_to: reply_to ?? null,
       priority: result.priority, attachments: result.attachments ?? []
     }
   })
@@ -42,7 +48,10 @@ export function handleMsgList(ws, msg, ctx) {
   const { messageService, sendWs } = ctx
   const { channel_id, after_seq, before_seq, limit } = msg.body || {}
 
-  const withRendered = messages => messages.map(m => ({ ...m, rendered_text: renderMarkdown(m.text).html }))
+  const withRendered = messages => messages.map(m => ({
+    ...m,
+    rendered_text: m.kind === 'pm' || m.kind === 'continuation_divider' ? null : renderMarkdown(m.text).html,
+  }))
 
   if (before_seq != null) {
     const result = messageService.listMessagesBefore({

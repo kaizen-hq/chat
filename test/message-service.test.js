@@ -148,3 +148,91 @@ test('listMessages returns messages in seq order after afterSeq', () => {
   expect(messages[0].text).toBe('two')
   expect(next_after_seq).toBe(3)
 })
+
+// ── kind='pm' messages ────────────────────────────────────────────────────────
+
+import { doc, paragraph, text as pmText } from '../src/core/pmDoc.js'
+
+function validPmMsg(body = 'fallback') {
+  return {
+    kind: 'pm',
+    content_json: JSON.stringify(doc(paragraph(pmText(body)))),
+    text: body,
+  }
+}
+
+test('sendMessage with kind=pm stores kind and content_json', () => {
+  const pm = validPmMsg('Cut over to live')
+  const result = service.sendMessage({ channelId: 'c1', userId: 'u1', ...pm })
+  expect(result.msg_id).toMatch(/^m_/)
+  const stored = service.messageRepo.getById(result.msg_id)
+  expect(stored.kind).toBe('pm')
+  expect(stored.content_json).toBe(pm.content_json)
+})
+
+test('sendMessage with kind=pm and no text fallback is rejected', () => {
+  expect(() => service.sendMessage({
+    channelId: 'c1', userId: 'u1',
+    kind: 'pm',
+    content_json: JSON.stringify(doc(paragraph(pmText('hi')))),
+    text: '   ',
+  })).toThrow(ServiceError)
+})
+
+test('sendMessage with kind=pm and no content_json is rejected', () => {
+  expect(() => service.sendMessage({
+    channelId: 'c1', userId: 'u1',
+    kind: 'pm',
+    text: 'fallback',
+  })).toThrow(ServiceError)
+})
+
+test('sendMessage with unknown kind is rejected', () => {
+  expect(() => service.sendMessage({
+    channelId: 'c1', userId: 'u1',
+    kind: 'html',
+    text: '<b>hi</b>',
+  })).toThrow(ServiceError)
+})
+
+test('sendMessage defaults to kind=text when kind is omitted', () => {
+  const result = service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'hello' })
+  const stored = service.messageRepo.getById(result.msg_id)
+  expect(stored.kind).toBe('text')
+})
+
+test('listMessages returns kind and content_json for pm messages', () => {
+  const pm = validPmMsg('summary')
+  service.sendMessage({ channelId: 'c1', userId: 'u1', ...pm })
+  const { messages } = service.listMessages({ channelId: 'c1', userId: 'u1' })
+  expect(messages[0].kind).toBe('pm')
+  expect(messages[0].content_json).toBe(pm.content_json)
+})
+
+// ── reply_to validation (Phase 5a) ────────────────────────────────────────────
+
+test('sendMessage with valid reply_to accepts the message', () => {
+  const parent = service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'original' })
+  const reply = service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'reply', replyTo: parent.msg_id })
+  expect(reply.msg_id).toMatch(/^m_/)
+})
+
+test('sendMessage with reply_to pointing to nonexistent msg is rejected', () => {
+  expect(() =>
+    service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'reply', replyTo: 'm_nope' })
+  ).toThrow(ServiceError)
+})
+
+test('sendMessage with reply_to pointing to a msg in a different channel is rejected', () => {
+  const other = service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'original' })
+  expect(() =>
+    service.sendMessage({ channelId: 'c2', userId: 'u1', text: 'reply', replyTo: other.msg_id })
+  ).toThrow(ServiceError)
+})
+
+test('sendMessage stores reply_to on the message', () => {
+  const parent = service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'original' })
+  const reply = service.sendMessage({ channelId: 'c1', userId: 'u1', text: 'reply', replyTo: parent.msg_id })
+  const stored = messageRepo.getById(reply.msg_id)
+  expect(stored.reply_to).toBe(parent.msg_id)
+})

@@ -57,8 +57,23 @@ export class WsClient extends EventTarget {
     return msg.id
   }
 
+  // handler registry: original handler → wrapper fn, keyed by type
+  #handlers = new Map()
+
   on(type, handler) {
-    this.addEventListener(type, (e) => handler(e.msg?.body ?? e.msg, e.msg))
+    const wrapper = (e) => handler(e.msg?.body ?? e.msg, e.msg)
+    if (!this.#handlers.has(type)) this.#handlers.set(type, new Map())
+    this.#handlers.get(type).set(handler, wrapper)
+    this.addEventListener(type, wrapper)
+    return this
+  }
+
+  off(type, handler) {
+    const wrapper = this.#handlers.get(type)?.get(handler)
+    if (wrapper) {
+      this.removeEventListener(type, wrapper)
+      this.#handlers.get(type).delete(handler)
+    }
     return this
   }
 

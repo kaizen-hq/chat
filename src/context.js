@@ -21,7 +21,10 @@ export let userSettingsService = null
 export let botService = null
 export let uploadService = null
 export let reactionService = null
+export let meetingService = null
+export let documentService = null
 export let logger = null
+export let entraAdapter = null
 
 export function init(services) {
   auth = services.auth
@@ -36,7 +39,15 @@ export function init(services) {
   botService = services.botService
   uploadService = services.uploadService
   reactionService = services.reactionService
+  meetingService = services.meetingService ?? null
+  documentService = services.documentService ?? null
   logger = services.logger
+  entraAdapter = services.entraAdapter ?? null
+}
+
+/** Returns true if all required Entra env vars are present. */
+export function isEntraConfigured() {
+  return !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET && process.env.AZURE_REDIRECT_URI)
 }
 
 /**

@@ -3,6 +3,8 @@
  *
  * Used by: islands/chat.js, islands/call.js
  */
+import { renderPmDoc } from './pm-renderer.js'
+import { renderAvatar } from '../avatar.js'
 
 export function escHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -122,7 +124,7 @@ export function renderAttachment(a) {
  * @param {{ msg_id, seq, user_id, user_display_name, ts, text, attachments }} msg
  * @param {{ userId?: string, userHandle?: string }} [ctx]  — caller's identity, used for self-styling and @mention highlighting
  */
-export function makeMessageEl({ msg_id, seq, user_id, user_display_name, ts, text, rendered_text, edited_at, attachments }, { userId, userHandle } = {}) {
+export function makeMessageEl({ msg_id, seq, user_id, user_display_name, ts, text, rendered_text, edited_at, attachments, kind, content_json }, { userId, userHandle, avatarChars = null, avatarColor = null, avatarCache = null } = {}) {
   const article = document.createElement('article')
   article.className = 'message'
   article.dataset.seq = seq
@@ -135,10 +137,26 @@ export function makeMessageEl({ msg_id, seq, user_id, user_display_name, ts, tex
   const attachmentHtml = (attachments ?? []).map(a => renderAttachment(a)).join('')
   const editedHtml = edited_at ? '<span class="message-edited">(edited)</span>' : ''
   const actionsHtml = `<div class="message-hover-actions"><span class="quick-picks"></span><button class="btn-react btn-icon" type="button" title="Add reaction" aria-label="Add reaction">🙂</button>${isSelf ? '<button class="btn-msg-actions btn-icon" type="button" title="Message actions">…</button>' : ''}</div>`
-  const textHtml = rendered_text ?? (text ? renderText(text, { userHandle }) : '')
+  let textHtml
+  if (kind === 'pm' && content_json) {
+    try {
+      textHtml = renderPmDoc(typeof content_json === 'string' ? JSON.parse(content_json) : content_json)
+    } catch {
+      textHtml = escHtml(text ?? '')
+    }
+  } else {
+    textHtml = rendered_text ?? (text ? renderText(text, { userHandle }) : '')
+  }
+  const cached = !isSelf ? avatarCache?.get(user_id) : null
+  const resolvedChars = isSelf ? avatarChars : (cached?.avatar_chars ?? null)
+  const resolvedColor = isSelf ? avatarColor : (cached?.avatar_color != null ? Number(cached.avatar_color) : null)
+  const avatarHtml = renderAvatar({ userId: user_id, displayName: user_display_name ?? '', size: 28, avatarChars: resolvedChars, avatarColor: resolvedColor })
   article.innerHTML = `
-      <span class="message-handle${isSelf ? '' : ' dm-trigger'}" data-user-id="${escHtml(user_id)}" title="${isSelf ? '' : 'Send a direct message'}">${escHtml(user_display_name ?? user_id)}</span>
-      <time class="message-time" datetime="${ts}">${time}${editedHtml}</time>
+      <div class="message-author">
+        ${avatarHtml}
+        <span class="message-handle${isSelf ? '' : ' dm-trigger'}" data-user-id="${escHtml(user_id)}" title="${isSelf ? '' : 'Send a direct message'}">${escHtml(user_display_name ?? user_id)}</span>
+        <time class="message-time" datetime="${ts}">${time}${editedHtml}</time>
+      </div>
       ${textHtml ? `<div class="message-text">${textHtml}</div>` : ''}
       ${attachmentHtml}
       ${actionsHtml}

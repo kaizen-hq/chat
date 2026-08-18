@@ -9,6 +9,8 @@ import { escHtml } from '../shared/messages.js'
 import { addLongPress } from '../long-press.js'
 import { showActionSheet, dismiss as dismissSheet, getItemsContainer } from '../action-sheet.js'
 import { showModal, dismiss as dismissModal } from '../modal.js'
+import { renderAvatar, PALETTE, initials, colorFromId } from '../avatar.js'
+import { getSettings, patchSettings } from '../settings-sync.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -962,6 +964,12 @@ export default function SidebarIsland(root) {
     if (dmUnread().has(newId)) {
       const next = new Set(dmUnread()); next.delete(newId); dmUnread.set(next)
     }
+    if (meetingUnread().has(newId)) {
+      const next = new Set(meetingUnread()); next.delete(newId); meetingUnread.set(next)
+    }
+    // Always re-render meetings so the selected highlight tracks the current channel,
+    // regardless of whether the unread signal changed.
+    renderMeetings()
   })
 
   ws.on('hub.reordered', ({ hubs: updated }) => {
@@ -1068,32 +1076,303 @@ export default function SidebarIsland(root) {
   }
   effect(() => updateMentionDots())
 
-  // DMs list rendering — driven by dms + dmUnread signals via effect below
-  const dmListEl = root.querySelector('#dm-list')
-  function renderDms() {
-    if (!dmListEl) return
-    const list = dms()
+  // Avatar cache — populated from user.list_result and kept current by user.avatar_updated
+  const avatarCache = signal(new Map())
+
+  // DMs — computed display items consumed by the each= template in the sidebar HTML
+  const dmsDisplay = computed(() => {
     const unread = dmUnread()
-    if (list.length === 0) {
-      dmListEl.innerHTML = '<li class="dm-empty" style="padding:4px 8px;color:var(--text-muted);font-size:13px">No messages yet.</li>'
-      return
-    }
-    dmListEl.innerHTML = list.map(d => {
-      const name = escHtml(d.with_user?.display_name ?? d.channel_id)
-      const selected = d.channel_id === currentChannelId ? ' dm-selected' : ''
-      const mentionAttr = unread.has(d.channel_id) ? ' data-mention=""' : ''
-      return `<li class="dm-item${selected}"${mentionAttr} data-channel-id="${escHtml(d.channel_id)}">
-        <a class="dm-link channel-link" href="${window.__BASE_PATH__}/channels/${escHtml(d.channel_id)}" data-channel-id="${escHtml(d.channel_id)}">
-          <span class="dm-name">${name}</span>
-        </a>
-      </li>`
-    }).join('')
-  }
-  effect(() => renderDms())
+    const cache = avatarCache()
+    return dms().map(d => {
+      const userId = d.with_user?.user_id ?? d.channel_id
+      const displayName = d.with_user?.display_name ?? ''
+      const cached = cache.get(userId)
+      const chars = (cached?.avatar_chars != null ? cached.avatar_chars : null) || initials(displayName, '') || '?'
+      const colorIdx = cached?.avatar_color != null ? Number(cached.avatar_color) : null
+      const { bg, fg } = colorIdx != null && PALETTE[colorIdx] ? PALETTE[colorIdx] : colorFromId(userId)
+      return {
+        channel_id: d.channel_id,
+        userId,
+        displayName: displayName || d.channel_id,
+        href: `${window.__BASE_PATH__}/channels/${d.channel_id}`,
+        itemClass: 'dm-item' + (d.channel_id === currentChannelId ? ' dm-selected' : ''),
+        mention: unread.has(d.channel_id) ? '' : null,
+        avatarStyle: `width:24px;height:24px;background:${bg};color:${fg};font-size:10px`,
+        avatarChars: chars,
+      }
+    })
+  })
+  const dmsEmpty = computed(() => dms().length === 0)
 
   // Fetch DM list as soon as the socket opens — the connection is already
   // authenticated via the session cookie at upgrade time, so no hello needed.
-  ws.on('open', () => ws.send({ t: 'dm.list', body: {} }))
+  ws.on('open', () => {
+    ws.send({ t: 'dm.list', body: {} })
+    ws.send({ t: 'meeting.list', body: {} })
+    ws.send({ t: 'user.list', body: {} })
+  })
+
+  ws.on('user.list_result', ({ users }) => {
+    const next = new Map(avatarCache())
+    for (const u of users ?? []) {
+      next.set(u.user_id, { avatar_chars: u.avatar_chars ?? null, avatar_color: u.avatar_color ?? null })
+    }
+    avatarCache.set(next)
+  })
+
+  ws.on('user.avatar_updated', ({ user_id, avatar_chars, avatar_color }) => {
+    const next = new Map(avatarCache())
+    next.set(user_id, { avatar_chars, avatar_color })
+    avatarCache.set(next)
+  })
+
+  // ── Meetings ───────────────────────────────────────────────────────────────
+
+  const meetings = signal([])
+  const meetingUnread = signal(new Set())
+
+  // Meetings — flattened list: each root meeting followed by its segments as children.
+  // Segments dispatch a scroll event rather than navigating to a new channel.
+  const meetingsDisplay = computed(() => {
+    const list = meetings()
+    const unread = meetingUnread()
+    const result = []
+    for (const m of list) {
+      const isActive = m.channel_id === currentChannelId
+      result.push({
+        item_key: m.channel_id,
+        channel_id: m.channel_id,
+        name: m.name,
+        href: `${window.__BASE_PATH__}/channels/${m.channel_id}`,
+        itemClass: 'meeting-item' + (isActive ? ' dm-selected' : ''),
+        mention: unread.has(m.channel_id) ? '' : null,
+        indentStyle: null,
+        isChild: null,
+        ended_at: m.ended_at || null,
+        divider_msg_id: null,
+      })
+      for (const seg of m.segments ?? []) {
+        result.push({
+          item_key: `${m.channel_id}:seg:${seg.id}`,
+          channel_id: m.channel_id,
+          name: seg.name,
+          href: `${window.__BASE_PATH__}/channels/${m.channel_id}`,
+          itemClass: 'meeting-item meeting-item--child' + (isActive ? ' dm-selected' : ''),
+          mention: null,
+          indentStyle: 'padding-left:12px',
+          isChild: true,
+          ended_at: seg.ended_at ?? null,
+          divider_msg_id: seg.divider_msg_id,
+        })
+      }
+    }
+    return result
+  })
+  const meetingsEmpty = computed(() => meetings().length === 0)
+
+  // Meeting link clicks:
+  // - Root meetings navigate normally.
+  // - Segment children (have data-divider-msg-id) scroll to the divider in the current
+  //   view if already on that channel, or navigate and hand off via sessionStorage.
+  root.addEventListener('click', e => {
+    const link = e.target.closest('.meeting-link')
+    if (!link) return
+    const channelId = link.dataset.channelId
+    const dividerMsgId = link.dataset.dividerMsgId
+
+    // Clear unread dot
+    if (channelId && meetingUnread().has(channelId)) {
+      const next = new Set(meetingUnread()); next.delete(channelId); meetingUnread.set(next)
+    }
+
+    if (dividerMsgId) {
+      e.preventDefault()
+      if (channelId === currentChannelId) {
+        // Already on the meeting channel — just scroll
+        document.dispatchEvent(new CustomEvent('meeting:scroll-to-msg', { detail: { msgId: dividerMsgId } }))
+      } else {
+        // Navigate to the meeting channel and scroll after load
+        sessionStorage.setItem('meeting:scroll-to-msg', dividerMsgId)
+        window.location.href = link.href
+      }
+    }
+  })
+
+  ws.on('meeting.list_result', ({ meetings: list }) => {
+    meetings.set(list)
+  })
+
+  ws.on('meeting.created', ({ meeting }) => {
+    if (!meetings().some(m => m.channel_id === meeting.channel_id)) {
+      meetings.set([meeting, ...meetings()])
+    }
+    window.location.href = `${window.__BASE_PATH__}/channels/${meeting.channel_id}`
+  })
+
+  ws.on('meeting.closed', ({ channel_id, ended_at, segments }) => {
+    meetings.set(meetings().map(m => {
+      if (m.channel_id !== channel_id) return m
+      return { ...m, ended_at, segments: segments ?? m.segments }
+    }))
+  })
+
+  ws.on('meeting.continued', ({ channel_id, segment, closed_segment }) => {
+    meetings.set(meetings().map(m => {
+      if (m.channel_id !== channel_id) return m
+      const segs = m.segments ?? []
+      // Update the previous segment's ended_at if one was closed
+      const updatedSegs = closed_segment
+        ? segs.map(s => s.id === closed_segment.id ? { ...s, ended_at: closed_segment.ended_at } : s)
+        : [...segs]
+      if (updatedSegs.some(s => s.id === segment.id)) return { ...m, segments: updatedSegs }
+      return { ...m, ended_at: m.ended_at ?? segment.created_at, segments: [...updatedSegs, segment] }
+    }))
+  })
+
+  // Received when another user invites us to a meeting
+  ws.on('meeting.invited', ({ meeting }) => {
+    if (!meetings().some(m => m.channel_id === meeting.channel_id)) {
+      meetings.set([meeting, ...meetings()])
+    }
+    const next = new Set(meetingUnread()); next.add(meeting.channel_id); meetingUnread.set(next)
+  })
+
+  function buildMeetingForm(container, { ws, dismiss }) {
+    // selectedAttendees: Map<user_id, { user_id, display_name, email }>
+    const selectedAttendees = new Map()
+
+    container.innerHTML = `
+      <div class="field">
+        <label for="meeting-name-input">Meeting name</label>
+        <input id="meeting-name-input" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Sprint Review">
+      </div>
+      <div class="field">
+        <label>Invite attendees</label>
+        <div class="attendee-chips" id="attendee-chips"></div>
+        <div class="attendee-search-wrap">
+          <input id="attendee-search" type="text" autocomplete="off" placeholder="Search by name, handle or email…">
+          <ul class="attendee-dropdown" id="attendee-dropdown" hidden></ul>
+        </div>
+      </div>
+      <div class="field">
+        <label for="meeting-scheduled-input">Scheduled time <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+        <input id="meeting-scheduled-input" type="datetime-local">
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="meeting-cancel-btn" type="button">Cancel</button>
+        <button class="btn-primary" id="meeting-save-btn" type="button">Create</button>
+      </div>
+    `
+
+    const chipsEl    = container.querySelector('#attendee-chips')
+    const searchEl   = container.querySelector('#attendee-search')
+    const dropdownEl = container.querySelector('#attendee-dropdown')
+
+    function renderChips() {
+      chipsEl.innerHTML = [...selectedAttendees.values()].map(u => `
+        <span class="attendee-chip" data-uid="${escHtml(u.user_id)}">
+          ${escHtml(u.display_name)}
+          <button class="chip-remove" type="button" aria-label="Remove ${escHtml(u.display_name)}">×</button>
+        </span>
+      `).join('')
+    }
+
+    chipsEl.addEventListener('click', e => {
+      const btn = e.target.closest('.chip-remove')
+      if (!btn) return
+      const uid = btn.closest('.attendee-chip').dataset.uid
+      selectedAttendees.delete(uid)
+      renderChips()
+    })
+
+    function showDropdown(users) {
+      if (users.length === 0) { dropdownEl.hidden = true; return }
+      dropdownEl.innerHTML = users.map(u => `
+        <li class="attendee-option" data-uid="${escHtml(u.user_id)}"
+            data-name="${escHtml(u.display_name)}" data-email="${escHtml(u.email ?? '')}">
+          <span class="attendee-option-name">${escHtml(u.display_name)}</span>
+          <span class="attendee-option-handle">@${escHtml(u.handle)}</span>
+        </li>
+      `).join('')
+      dropdownEl.hidden = false
+    }
+
+    dropdownEl.addEventListener('mousedown', e => {
+      // mousedown fires before blur — prevent search input losing focus prematurely
+      e.preventDefault()
+      const li = e.target.closest('.attendee-option')
+      if (!li) return
+      selectedAttendees.set(li.dataset.uid, {
+        user_id: li.dataset.uid,
+        display_name: li.dataset.name,
+        email: li.dataset.email,
+      })
+      renderChips()
+      searchEl.value = ''
+      dropdownEl.hidden = true
+      searchEl.focus()
+    })
+
+    // Pending WS request id so we can ignore stale results
+    let pendingSearchId = null
+    let searchTimer = null
+
+    function doSearch(q) {
+      if (!q.trim()) { dropdownEl.hidden = true; return }
+      const id = `user-search-${Date.now()}`
+      pendingSearchId = id
+      ws.send({ t: 'user.search', id, body: { q } })
+    }
+
+    searchEl.addEventListener('input', () => {
+      clearTimeout(searchTimer)
+      searchTimer = setTimeout(() => doSearch(searchEl.value), 200)
+    })
+
+    searchEl.addEventListener('blur', () => { dropdownEl.hidden = true })
+    searchEl.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { dropdownEl.hidden = true; searchEl.value = '' }
+    })
+
+    // One-time listener that forwards search results into the dropdown.
+    // We keep it alive for the duration of the form (cleaned up when form is torn down).
+    function onSearchResult({ users, _replyTo }) {
+      // Filter out already-selected users
+      const filtered = users.filter(u => !selectedAttendees.has(u.user_id))
+      showDropdown(filtered)
+    }
+    ws.on('user.search_result', onSearchResult)
+
+    // Cleanup listener when the form is dismissed
+    const origDismiss = dismiss
+    dismiss = () => { ws.off('user.search_result', onSearchResult); origDismiss() }
+
+    container.querySelector('#meeting-cancel-btn').addEventListener('click', dismiss)
+    container.querySelector('#meeting-save-btn').addEventListener('click', () => {
+      const name = container.querySelector('#meeting-name-input').value.trim()
+      if (!name) { container.querySelector('#meeting-name-input').focus(); return }
+      const attendee_user_ids = [...selectedAttendees.values()].map(u => u.user_id)
+      const scheduledRaw = container.querySelector('#meeting-scheduled-input').value
+      const scheduled_at = scheduledRaw ? new Date(scheduledRaw).toISOString() : null
+      ws.send({ t: 'meeting.create', body: { name, attendee_user_ids, scheduled_at } })
+      dismiss()
+    })
+
+    container.querySelector('#meeting-name-input').focus()
+  }
+
+  function openCreateMeetingModal(ws) {
+    showModal({ title: 'New meeting', build: body => buildMeetingForm(body, { ws, dismiss: dismissModal }) })
+  }
+
+  function openCreateMeetingSheet(ws) {
+    showActionSheet({ label: 'New meeting', items: [] })
+    buildMeetingForm(getItemsContainer(), { ws, dismiss: dismissSheet })
+  }
+
+  root.querySelector('#btn-new-meeting')?.addEventListener('click', () => {
+    isTouch() ? openCreateMeetingSheet(ws) : openCreateMeetingModal(ws)
+  })
 
   // New hub button
   root.querySelector('#btn-new-hub')?.addEventListener('click', () => {
@@ -1193,5 +1472,119 @@ export default function SidebarIsland(root) {
     }
   }
 
-  return { hubs }
+  // ── Footer avatar ──────────────────────────────────────────────────────────
+
+  const footerUsernameEl = root.querySelector('.sidebar-username')
+  if (footerUsernameEl) {
+    const userId      = root.dataset.userid ?? ''
+    const displayName = root.dataset.displayname || footerUsernameEl.textContent.trim()
+    const handle      = root.dataset.handle ?? ''
+
+    // Seed avatar state: SSR (baked from DB on this request) is most reliable.
+    // Fall back to localStorage in case syncToServer hadn't finished before the reload.
+    // Neither source is read again after mount — in-session changes update sessionAvatarChars/Color directly.
+    const lsSettings    = getSettings()
+    const ssrChars      = root.dataset.avatarChars || null
+    const ssrColor      = root.dataset.avatarColor !== '' ? Number(root.dataset.avatarColor) : null
+    let sessionAvatarChars = ssrChars
+      ?? (lsSettings.avatar_chars != null ? lsSettings.avatar_chars : null)
+    let sessionAvatarColor = ssrColor
+      ?? (lsSettings.avatar_color != null ? Number(lsSettings.avatar_color) : null)
+
+    function buildFooterAvatar() {
+      return renderAvatar({ userId, displayName, handle, avatarChars: sessionAvatarChars, avatarColor: sessionAvatarColor, size: 30 })
+    }
+
+    const avatarBtn = document.createElement('button')
+    avatarBtn.type = 'button'
+    avatarBtn.className = 'sidebar-avatar-btn'
+    avatarBtn.title = 'Edit your avatar'
+    avatarBtn.setAttribute('aria-label', 'Edit your avatar')
+    avatarBtn.innerHTML = buildFooterAvatar()
+    footerUsernameEl.before(avatarBtn)
+
+    // ── Avatar editor popover ────────────────────────────────────────────────
+    const editorEl = document.createElement('div')
+    editorEl.className = 'avatar-editor'
+    editorEl.hidden = true
+    editorEl.innerHTML = `
+      <div class="avatar-editor-header">Edit avatar</div>
+      <label class="avatar-editor-label">
+        Letters (1-2)
+        <input class="avatar-editor-chars" type="text" maxlength="2" placeholder="Auto" value="${escHtml(sessionAvatarChars || initials(displayName, handle))}">
+      </label>
+      <div class="avatar-editor-label">Color</div>
+      <div class="avatar-editor-palette"></div>
+      <button class="btn-ghost btn-sm avatar-editor-save" type="button">Save</button>
+    `
+    footerUsernameEl.closest('.sidebar-footer-controls')?.appendChild(editorEl)
+
+    // Populate palette swatches
+    const paletteEl = editorEl.querySelector('.avatar-editor-palette')
+    PALETTE.forEach(({ bg, fg }, idx) => {
+      const sw = document.createElement('button')
+      sw.type = 'button'
+      sw.className = 'avatar-swatch'
+      sw.style.cssText = `background:${bg};color:${fg}`
+      sw.dataset.index = idx
+      sw.setAttribute('aria-label', `Color ${idx + 1}`)
+      paletteEl.appendChild(sw)
+    })
+
+    let selectedColor = sessionAvatarColor
+    const charsInput = editorEl.querySelector('.avatar-editor-chars')
+
+    function openEditor() {
+      charsInput.value = sessionAvatarChars || initials(displayName, handle)
+      selectedColor = sessionAvatarColor
+      paletteEl.querySelectorAll('.avatar-swatch').forEach(sw => {
+        sw.classList.toggle('avatar-swatch--selected', Number(sw.dataset.index) === selectedColor)
+      })
+      editorEl.hidden = false
+      charsInput.focus()
+      charsInput.select()
+    }
+
+    function saveAndClose() {
+      const raw = charsInput.value.trim().slice(0, 2).toUpperCase()
+      sessionAvatarChars = raw || null
+      sessionAvatarColor = selectedColor
+      patchSettings({ avatar_chars: sessionAvatarChars, avatar_color: sessionAvatarColor })
+      ws.send({ t: 'user.avatar_updated', body: { avatar_chars: sessionAvatarChars, avatar_color: sessionAvatarColor } })
+      avatarBtn.innerHTML = buildFooterAvatar()
+      editorEl.hidden = true
+
+      // Refresh every avatar in the page that belongs to this user
+      document.querySelectorAll(`.avatar[data-user-id="${CSS.escape(userId)}"]`).forEach(span => {
+        const size = parseInt(span.style.width) || 28
+        const newHtml = renderAvatar({ userId, displayName, handle, avatarChars: sessionAvatarChars, avatarColor: sessionAvatarColor, size })
+        span.insertAdjacentHTML('afterend', newHtml)
+        span.remove()
+      })
+    }
+
+    avatarBtn.addEventListener('click', () => {
+      if (editorEl.hidden) openEditor()
+      else saveAndClose()
+    })
+
+    paletteEl.addEventListener('click', e => {
+      const sw = e.target.closest('.avatar-swatch')
+      if (!sw) return
+      selectedColor = Number(sw.dataset.index)
+      paletteEl.querySelectorAll('.avatar-swatch').forEach(s => s.classList.remove('avatar-swatch--selected'))
+      sw.classList.add('avatar-swatch--selected')
+    })
+
+    editorEl.querySelector('.avatar-editor-save').addEventListener('click', saveAndClose)
+
+    // Save and close when clicking outside the editor
+    document.addEventListener('click', e => {
+      if (!editorEl.hidden && !editorEl.contains(e.target) && !avatarBtn.contains(e.target)) {
+        saveAndClose()
+      }
+    })
+  }
+
+  return { hubs, dmsDisplay, dmsEmpty, meetingsDisplay, meetingsEmpty }
 }

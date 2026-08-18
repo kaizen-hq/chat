@@ -7,6 +7,7 @@
       "dependencies": {
         "@devchitchat/index97": "^3.2.0",
         "@devchitchat/rdbljs": "^2.0.1",
+        "jose": "^6.2.9",
       },
     },
   },
@@ -14,6 +15,8 @@
     "@devchitchat/index97": ["@devchitchat/index97@3.2.0", "", { "peerDependencies": { "typescript": "^5" }, "optionalPeers": ["typescript"], "bin": { "index97": "cli.js" } }, "sha512-p2dMzue1+IqPlx7bgvxsRKYvjKsgs83ipQU4mPKWZaIBMAi9b5SnqxdOsTF425gSiLzRW6nSDdcH7Fb+XTCUog=="],
 
     "@devchitchat/rdbljs": ["@devchitchat/rdbljs@2.0.1", "", { "peerDependencies": { "typescript": "^5" }, "optionalPeers": ["typescript"] }, "sha512-miBwbwIIHX66R0jrjwO+RZdtZY0wQ4xALcsf6VdWnNuqCWI9bOH4vEAKPyDMGJ6n1/6gIegYgEJJtTnMZR1X4Q=="],
+
+    "jose": ["jose@6.2.9", "", {}, "sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA=="],
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
   }

@@ -17,12 +17,14 @@
  */
 import { signal, effect, computed, Context } from '@devchitchat/rdbljs'
 import { WsClient } from '../ws.js'
-import { patchSettings } from '../settings-sync.js'
+import { patchSettings, getSettings } from '../settings-sync.js'
 import { navigateTo } from '../router.js'
 import { escHtml, utcDateKey, formatDateLabel, makeDateSeparator, applyInlineRenderingToTextNodes, renderAttachment, makeMessageEl } from '../shared/messages.js'
+import { renderAvatar } from '../avatar.js'
 import { RtcPeerManager } from '../rtc-peer-manager.js'
 import { CATEGORIES, EMOJI_NAMES } from '../emoji-data.js'
 import { showActionSheet, dismiss as dismissActionSheet, getItemsContainer } from '../action-sheet.js'
+import { showModal, dismiss as dismissModal } from '../modal.js'
 import { addLongPress } from '../long-press.js'
 
 export default function CallIsland(root) {
@@ -45,6 +47,9 @@ export default function CallIsland(root) {
   const callStatusAvatars = document.getElementById('call-status-avatars')
   const callControlsEl = document.getElementById('call-controls-bar')
   const peerCountEl   = document.getElementById('call-peer-count')
+  const btnInviteMeeting    = document.getElementById('btn-invite-meeting')
+  const btnCloseMeeting     = document.getElementById('btn-close-meeting')
+  const btnContinueMeeting  = document.getElementById('btn-continue-meeting')
   const btnStartCall  = document.getElementById('btn-start-call')
   const btnJoinCall   = document.getElementById('btn-join-call')
   const btnLeaveCall  = document.getElementById('btn-leave-call')
@@ -68,6 +73,9 @@ export default function CallIsland(root) {
   const channelName = signal(root.dataset.name ?? '')
   const channelTopic = signal(root.dataset.topic ?? '')
   let afterSeq = seedSeq
+
+  // ── Avatar cache — populated from user.list_result, kept fresh by user.avatar_updated ──
+  const userAvatarCache = new Map() // userId → { avatar_chars, avatar_color }
 
   // ── @mention picker state ──────────────────────────────────────────────────
   let channelMembers  = []   // [{ user_id, handle, display_name }] — non-bot users
@@ -155,8 +163,33 @@ export default function CallIsland(root) {
       if (article.dataset.hydrated) continue
       article.dataset.hydrated = '1'
 
-      // Add dm-trigger to non-self sender handles
+      // Continuation dividers are stored as messages but rendered as visual separators
+      if (article.dataset.kind === 'continuation_divider') {
+        const ts = parseInt(article.querySelector('time')?.getAttribute('datetime') ?? '0', 10)
+        const text = article.querySelector('.message-text')?.textContent?.trim() || 'Continued'
+        const sep = makeMeetingSeparator({ msg_id: article.dataset.msgId, text, ts })
+        article.replaceWith(sep)
+        continue
+      }
+
+      // Wrap handle + time into .message-author and inject avatar
       const handle = article.querySelector('.message-handle[data-user-id]')
+      const timeEl2 = article.querySelector('.message-time')
+      if (handle && !article.querySelector('.message-author')) {
+        const authorDiv = document.createElement('div')
+        authorDiv.className = 'message-author'
+        const msgUserId = handle.dataset.userId ?? ''
+        const displayName = handle.textContent.trim()
+        const isSeedSelf = msgUserId === userId
+        const selfSettings = isSeedSelf ? getSettings() : {}
+        const cachedSettings = !isSeedSelf ? (userAvatarCache.get(msgUserId) ?? {}) : {}
+        const seedAvatarChars = isSeedSelf ? (selfSettings.avatar_chars ?? null) : (cachedSettings.avatar_chars ?? null)
+        const seedAvatarColor = isSeedSelf ? (selfSettings.avatar_color != null ? Number(selfSettings.avatar_color) : null) : (cachedSettings.avatar_color != null ? Number(cachedSettings.avatar_color) : null)
+        authorDiv.insertAdjacentHTML('beforeend', renderAvatar({ userId: msgUserId, displayName, size: 28, avatarChars: seedAvatarChars, avatarColor: seedAvatarColor }))
+        handle.parentNode.insertBefore(authorDiv, handle)
+        authorDiv.appendChild(handle)
+        if (timeEl2) authorDiv.appendChild(timeEl2)
+      }
       if (handle && handle.dataset.userId !== userId) {
         handle.classList.add('dm-trigger')
         handle.title = 'Send a direct message'
@@ -273,11 +306,16 @@ export default function CallIsland(root) {
     }
 
     for (const m of msgs) {
+      if (m.kind === 'continuation_divider') {
+        fragment.appendChild(makeMeetingSeparator(m))
+        continue
+      }
       const dateKey = utcDateKey(m.ts)
       if (prevDate && dateKey !== prevDate) {
         fragment.appendChild(makeDateSeparator(prevDate))
       }
-      fragment.appendChild(makeMessageEl(m, { userId, userHandle }))
+      const s1 = getSettings()
+      fragment.appendChild(makeMessageEl(m, { userId, userHandle, avatarChars: s1.avatar_chars ?? null, avatarColor: s1.avatar_color != null ? Number(s1.avatar_color) : null, avatarCache: userAvatarCache }))
       prevDate = dateKey
     }
 
@@ -392,6 +430,30 @@ export default function CallIsland(root) {
 
   ws.on('user.list_result', ({ users }) => {
     channelMembers = (users ?? []).filter(m => m.handle)
+    for (const u of users ?? []) {
+      userAvatarCache.set(u.user_id, { avatar_chars: u.avatar_chars ?? null, avatar_color: u.avatar_color ?? null })
+      // Patch any avatar spans already in the DOM (e.g. SSR seed messages hydrated before this arrived)
+      if (u.avatar_chars != null || u.avatar_color != null) {
+        document.querySelectorAll(`.avatar[data-user-id="${CSS.escape(u.user_id)}"]`).forEach(span => {
+          const size = parseInt(span.style.width) || 28
+          const displayName = span.title || ''
+          const newHtml = renderAvatar({ userId: u.user_id, displayName, avatarChars: u.avatar_chars ?? null, avatarColor: u.avatar_color != null ? Number(u.avatar_color) : null, size })
+          span.insertAdjacentHTML('afterend', newHtml)
+          span.remove()
+        })
+      }
+    }
+  })
+
+  ws.on('user.avatar_updated', ({ user_id, avatar_chars, avatar_color }) => {
+    userAvatarCache.set(user_id, { avatar_chars, avatar_color })
+    document.querySelectorAll(`.avatar[data-user-id="${CSS.escape(user_id)}"]`).forEach(span => {
+      const size = parseInt(span.style.width) || 28
+      const displayName = span.title || ''
+      const newHtml = renderAvatar({ userId: user_id, displayName, avatarChars: avatar_chars, avatarColor: avatar_color != null ? Number(avatar_color) : null, size })
+      span.insertAdjacentHTML('afterend', newHtml)
+      span.remove()
+    })
   })
 
   ws.on('bot.list_result', ({ bots }) => {
@@ -843,8 +905,23 @@ export default function CallIsland(root) {
     }
   }
 
-  function appendMessage({ msg_id, seq, user_id, user_display_name, ts, text, rendered_text, attachments, reactions }) {
-    if (messages.querySelector(`[data-msg-id="${msg_id}"]`)) return
+  function makeMeetingSeparator({ msg_id, text, ts }) {
+    const el = document.createElement('div')
+    el.className = 'meeting-separator'
+    el.dataset.msgId = msg_id
+    const time = ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+    el.innerHTML = `<span class="meeting-separator-label">${escHtml(text || 'Continued')}<time class="meeting-separator-time">${time}</time></span>`
+    return el
+  }
+
+  function appendMessage({ msg_id, seq, user_id, user_display_name, ts, text, rendered_text, attachments, reactions, kind, content_json }) {
+    if (messages.querySelector(`[data-msg-id="${CSS.escape(msg_id)}"]`)) return
+
+    if (kind === 'continuation_divider') {
+      messages.appendChild(makeMeetingSeparator({ msg_id, text, ts }))
+      messages.scrollTop = messages.scrollHeight
+      return
+    }
 
     // Date separator if day changed
     const dateKey = utcDateKey(ts)
@@ -856,7 +933,8 @@ export default function CallIsland(root) {
       }
     }
 
-    const article = makeMessageEl({ msg_id, seq, user_id, user_display_name, ts, text, rendered_text, attachments }, { userId, userHandle })
+    const s2 = getSettings()
+    const article = makeMessageEl({ msg_id, seq, user_id, user_display_name, ts, text, rendered_text, attachments, kind, content_json }, { userId, userHandle, avatarChars: s2.avatar_chars ?? null, avatarColor: s2.avatar_color != null ? Number(s2.avatar_color) : null, avatarCache: userAvatarCache })
 
     // Ensure reaction bar exists in dynamically created messages
     if (!article.querySelector('.reaction-bar')) {
@@ -893,6 +971,22 @@ export default function CallIsland(root) {
     const targetUserId = handle.dataset.userId
     if (!targetUserId || targetUserId === userId) return
     ws.send({ t: 'dm.open', body: { target_user_id: targetUserId } })
+  })
+
+  // Delegated click: PM action buttons → send reply
+  messages.addEventListener('click', e => {
+    const btn = e.target.closest('.pm-action-btn')
+    if (!btn) return
+    const article = btn.closest('article.message')
+    if (!article) return
+    const replyToMsgId = article.dataset.msgId
+    const value = btn.dataset.pmValue
+    if (!replyToMsgId || value == null) return
+
+    // Disable all buttons in this action row to prevent double-submit
+    for (const b of article.querySelectorAll('.pm-action-btn')) b.disabled = true
+
+    ws.send({ t: 'msg.send', body: { channel_id: channelId, text: btn.textContent.trim(), reply_to: replyToMsgId, body: { value } } })
   })
 
   // ── Emoji picker ──────────────────────────────────────────────────────────
@@ -1372,6 +1466,199 @@ export default function CallIsland(root) {
     li.classList.toggle('call-active', count > 0)
     const badge = li.querySelector('.call-badge')
     if (badge) badge.textContent = count > 0 ? String(count) : ''
+  }
+
+  // ── Meeting: header buttons ───────────────────────────────────────────────
+
+  // Track meeting open/closed state for button visibility.
+  // Seeded from SSR data attributes; updated via WS events.
+  let meetingEndedAt = root.dataset.meetingEndedAt || null
+
+  function syncMeetingButtons() {
+    const isMeeting = (channelKind === 'meeting')
+    if (btnInviteMeeting)   btnInviteMeeting.hidden   = !isMeeting || !!meetingEndedAt
+    if (btnCloseMeeting)    btnCloseMeeting.hidden     = !isMeeting || !!meetingEndedAt
+    if (btnContinueMeeting) btnContinueMeeting.hidden  = !isMeeting || !meetingEndedAt
+    // When the current phase is closed, disable the composer and Start Call.
+    // Clicking Continue reopens a new phase and re-enables them.
+    const phaseClosed = isMeeting && !!meetingEndedAt
+    if (composerEl)  composerEl.inert  = phaseClosed
+    if (btnStartCall) btnStartCall.hidden = isMeeting && !!meetingEndedAt
+  }
+  syncMeetingButtons()
+
+  function buildInviteForm(container, { dismiss }) {
+    const selectedUsers = new Map()
+
+    container.innerHTML = `
+      <div class="field">
+        <div class="attendee-chips" id="invite-chips"></div>
+        <div class="attendee-search-wrap">
+          <input id="invite-search" type="text" autocomplete="off" placeholder="Search by name, handle or email…">
+          <ul class="attendee-dropdown" id="invite-dropdown" hidden></ul>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="invite-cancel-btn" type="button">Cancel</button>
+        <button class="btn-primary" id="invite-save-btn" type="button">Invite</button>
+      </div>
+    `
+
+    const chipsEl    = container.querySelector('#invite-chips')
+    const searchEl   = container.querySelector('#invite-search')
+    const dropdownEl = container.querySelector('#invite-dropdown')
+
+    function renderChips() {
+      chipsEl.innerHTML = [...selectedUsers.values()].map(u => `
+        <span class="attendee-chip" data-uid="${escHtml(u.user_id)}">
+          ${escHtml(u.display_name)}
+          <button class="chip-remove" type="button" aria-label="Remove ${escHtml(u.display_name)}">×</button>
+        </span>
+      `).join('')
+    }
+
+    chipsEl.addEventListener('click', e => {
+      const btn = e.target.closest('.chip-remove')
+      if (!btn) return
+      selectedUsers.delete(btn.closest('.attendee-chip').dataset.uid)
+      renderChips()
+    })
+
+    function showDropdown(users) {
+      if (users.length === 0) { dropdownEl.hidden = true; return }
+      dropdownEl.innerHTML = users.map(u => `
+        <li class="attendee-option" data-uid="${escHtml(u.user_id)}"
+            data-name="${escHtml(u.display_name)}" data-handle="${escHtml(u.handle)}">
+          <span class="attendee-option-name">${escHtml(u.display_name)}</span>
+          <span class="attendee-option-handle">@${escHtml(u.handle)}</span>
+        </li>
+      `).join('')
+      dropdownEl.hidden = false
+    }
+
+    dropdownEl.addEventListener('mousedown', e => {
+      e.preventDefault()
+      const li = e.target.closest('.attendee-option')
+      if (!li) return
+      selectedUsers.set(li.dataset.uid, { user_id: li.dataset.uid, display_name: li.dataset.name, handle: li.dataset.handle })
+      renderChips()
+      searchEl.value = ''
+      dropdownEl.hidden = true
+      searchEl.focus()
+    })
+
+    function onSearchResult({ users }) {
+      showDropdown(users.filter(u => !selectedUsers.has(u.user_id)))
+    }
+    ws.on('user.search_result', onSearchResult)
+
+    let searchTimer = null
+    searchEl.addEventListener('input', () => {
+      clearTimeout(searchTimer)
+      const q = searchEl.value
+      searchTimer = setTimeout(() => {
+        if (q.trim()) ws.send({ t: 'user.search', body: { q } })
+        else dropdownEl.hidden = true
+      }, 200)
+    })
+    searchEl.addEventListener('blur', () => { dropdownEl.hidden = true })
+    searchEl.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { dropdownEl.hidden = true; searchEl.value = '' }
+    })
+
+    const origDismiss = dismiss
+    dismiss = () => { ws.off('user.search_result', onSearchResult); origDismiss() }
+
+    container.querySelector('#invite-cancel-btn').addEventListener('click', dismiss)
+    container.querySelector('#invite-save-btn').addEventListener('click', () => {
+      const user_ids = [...selectedUsers.keys()]
+      if (user_ids.length === 0) { searchEl.focus(); return }
+      ws.send({ t: 'meeting.invite', body: { channel_id: channelId, user_ids } })
+      dismiss()
+    })
+
+    searchEl.focus()
+  }
+
+  btnInviteMeeting?.addEventListener('click', () => {
+    const isTouch = window.matchMedia('(pointer: coarse)').matches
+    if (isTouch) {
+      showActionSheet({ label: 'Invite to meeting', items: [] })
+      buildInviteForm(getItemsContainer(), { dismiss: dismissActionSheet })
+    } else {
+      showModal({ title: 'Invite to meeting', build: body => buildInviteForm(body, { dismiss: dismissModal }) })
+    }
+  })
+
+  btnCloseMeeting?.addEventListener('click', () => {
+    ws.send({ t: 'meeting.close', body: { channel_id: channelId } })
+  })
+
+  btnContinueMeeting?.addEventListener('click', () => {
+    showModal({
+      title: 'Continue this meeting',
+      build: body => {
+        body.innerHTML = `
+          <div class="field">
+            <label for="continue-name-input">New meeting name <span style="font-weight:400;color:var(--text-muted)">(optional — leave blank to keep the same name)</span></label>
+            <input id="continue-name-input" type="text" maxlength="80" autocomplete="off">
+          </div>
+          <div class="modal-footer">
+            <button class="btn-ghost" id="continue-cancel-btn" type="button">Cancel</button>
+            <button class="btn-primary" id="continue-save-btn" type="button">Continue →</button>
+          </div>
+        `
+        body.querySelector('#continue-cancel-btn').addEventListener('click', dismissModal)
+        body.querySelector('#continue-save-btn').addEventListener('click', () => {
+          const name = body.querySelector('#continue-name-input').value.trim() || null
+          ws.send({ t: 'meeting.continue', body: { channel_id: channelId, name } })
+          dismissModal()
+        })
+        body.querySelector('#continue-name-input').focus()
+      }
+    })
+  })
+
+  ws.on('meeting.closed', ({ channel_id, ended_at }) => {
+    if (channel_id !== channelId) return
+    meetingEndedAt = ended_at
+    syncMeetingButtons()
+  })
+
+  ws.on('meeting.continued', ({ channel_id, divider_msg }) => {
+    if (channel_id !== channelId) return
+    // The sender is excluded from the msg.event broadcast, so inject the
+    // divider separator directly from the meeting.continued payload.
+    if (divider_msg?.msg_id) appendMessage({ ...divider_msg, channel_id })
+    // New segment is like a fresh meeting in progress — reset so Close shows again.
+    meetingEndedAt = null
+    syncMeetingButtons()
+  })
+
+  // Scroll to a specific message by msg_id (dispatched by sidebar segment clicks)
+  function scrollToMsg(msgId) {
+    const el = messages.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      el.classList.add('message--highlight')
+      setTimeout(() => el.classList.remove('message--highlight'), 1500)
+    }
+  }
+
+  document.addEventListener('meeting:scroll-to-msg', e => {
+    if (e.detail?.msgId) scrollToMsg(e.detail.msgId)
+  })
+
+  // Handle scroll target handed off via sessionStorage when navigating to a meeting
+  const pendingScrollMsgId = sessionStorage.getItem('meeting:scroll-to-msg')
+  if (pendingScrollMsgId) {
+    sessionStorage.removeItem('meeting:scroll-to-msg')
+    // Wait for messages to render, then scroll
+    const tryScroll = () => {
+      const el = messages.querySelector(`[data-msg-id="${CSS.escape(pendingScrollMsgId)}"]`)
+      if (el) { scrollToMsg(pendingScrollMsgId) } else { setTimeout(tryScroll, 300) }
+    }
+    setTimeout(tryScroll, 300)
   }
 
   // ── Call: start / join / leave ─────────────────────────────────────────────
@@ -1959,6 +2246,8 @@ export default function CallIsland(root) {
     // Update local identity
     channelId = newId
     channelKind = kind
+    meetingEndedAt = e.detail.meetingEndedAt ?? null
+    syncMeetingButtons()
     channelName.set(name)
     channelTopic.set(topic)
     afterSeq = newSeedSeq

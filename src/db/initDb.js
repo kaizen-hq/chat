@@ -7,7 +7,12 @@ export const createSchema = (db) => {
       display_name TEXT NOT NULL,
       roles_json TEXT NOT NULL,
       password_hash TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      entra_oid TEXT UNIQUE,
+      email TEXT,
+      upn TEXT,
+      allow_local_auth INTEGER NOT NULL DEFAULT 0,
+      activation_token_hash TEXT
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -18,6 +23,8 @@ export const createSchema = (db) => {
       expires_at INTEGER NOT NULL,
       revoked_at INTEGER,
       last_seen_at INTEGER,
+      access_token TEXT,
+      refresh_token TEXT,
       FOREIGN KEY(user_id) REFERENCES users(user_id)
     );
 
@@ -105,6 +112,9 @@ export const createSchema = (db) => {
       priority TEXT NOT NULL DEFAULT 'normal',
       attachments_json TEXT,
       edited_at INTEGER,
+      kind TEXT NOT NULL DEFAULT 'text',
+      content_json TEXT,
+      reply_to TEXT,
       FOREIGN KEY(channel_id) REFERENCES channels(channel_id),
       FOREIGN KEY(user_id) REFERENCES users(user_id)
     );
@@ -160,6 +170,29 @@ export const createSchema = (db) => {
 
     CREATE INDEX IF NOT EXISTS idx_calls_channel_active
       ON calls (channel_id) WHERE ended_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS meeting_meta (
+      channel_id              TEXT PRIMARY KEY REFERENCES channels(channel_id),
+      scheduled_at            TEXT,
+      ended_at                TEXT,
+      parent_channel_id       TEXT REFERENCES channels(channel_id),
+      continuation_channel_id TEXT REFERENCES channels(channel_id),
+      calendar_event_id       TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS pinned_documents (
+      doc_id          TEXT PRIMARY KEY,
+      hub_id          TEXT REFERENCES hubs(hub_id),
+      channel_id      TEXT REFERENCES channels(channel_id),
+      repo            TEXT NOT NULL,
+      path            TEXT NOT NULL,
+      title           TEXT NOT NULL,
+      last_commit     TEXT,
+      last_updated_at TEXT,
+      pinned_by       TEXT NOT NULL REFERENCES users(user_id),
+      pinned_at       TEXT NOT NULL,
+      CHECK (hub_id IS NOT NULL OR channel_id IS NOT NULL)
+    );
   `)
 
   // Add sort_order to existing databases that pre-date this column

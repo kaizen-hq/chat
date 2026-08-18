@@ -112,9 +112,26 @@ export function handleChannelListMembers(ws, msg, ctx) {
 // ── Users ──────────────────────────────────────────────────────────────────────
 
 export function handleUserList(ws, msg, ctx) {
-  const { auth, sendWs } = ctx
+  const { auth, userSettingsService, sendWs } = ctx
   const users = auth.listUsersBasic().filter(u => !u.roles.includes('bot'))
-  sendWs(ws, { t: 'user.list_result', reply_to: msg.id, ok: true, body: { users } })
+  const enriched = users.map(u => {
+    const { settings } = userSettingsService.getSettings(u.user_id)
+    return { ...u, avatar_chars: settings.avatar_chars ?? null, avatar_color: settings.avatar_color ?? null }
+  })
+  sendWs(ws, { t: 'user.list_result', reply_to: msg.id, ok: true, body: { users: enriched } })
+}
+
+export function handleUserSearch(ws, msg, ctx) {
+  const { auth, sendWs } = ctx
+  const { q } = msg.body || {}
+  const users = auth.searchUsers({ query: q ?? '', excludeUserId: ws.data.userId })
+  sendWs(ws, { t: 'user.search_result', reply_to: msg.id, ok: true, body: { users } })
+}
+
+export function handleUserAvatarUpdated(ws, msg, ctx) {
+  const { broadcastToAll } = ctx
+  const { avatar_chars = null, avatar_color = null } = msg.body || {}
+  broadcastToAll({ t: 'user.avatar_updated', ok: true, body: { user_id: ws.data.userId, avatar_chars, avatar_color } }, ws)
 }
 
 export function handleBotList(ws, msg, ctx) {

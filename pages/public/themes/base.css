@@ -159,6 +159,189 @@ details summary {
   }
 }
 
+/* ── Meetings section ────────────────────────────────────────────────────── */
+.meetings-section {
+  margin-top: 4px;
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--border);
+}
+
+.meetings-section-title {
+  padding: 4px 16px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.btn-new-meeting {
+  margin-left: auto;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+  padding: 0 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-new-meeting:hover {
+  color: var(--text-primary);
+}
+
+/* ── Attendee chip typeahead ─────────────────────────────────────────────── */
+.attendee-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 0;
+  margin-bottom: 6px;
+}
+
+.attendee-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 10px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.chip-remove:hover { opacity: 1; }
+
+.attendee-search-wrap {
+  position: relative;
+}
+
+.attendee-search-wrap input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.attendee-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.attendee-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.attendee-option:hover {
+  background: var(--bg-hover);
+}
+
+.attendee-option-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.attendee-option-handle {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* unread dot on meeting items (reuses channel/DM pattern) */
+.meeting-item[data-mention] .meeting-link {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.meeting-child-arrow {
+  font-size: 10px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.meeting-ended-icon {
+  font-size: 11px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.meeting-item[data-mention] .meeting-link::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.meetings-list {
+  list-style: none;
+}
+
+.meeting-item {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.meeting-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  height: 2rem;
+  padding: 0 16px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.9em;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color var(--transition), background var(--transition);
+}
+
+.meeting-link:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.meeting-item.dm-selected .meeting-link {
+  color: var(--text-primary);
+  background: var(--bg-active);
+  font-weight: 600;
+}
+
 /* ── Direct Messages section ─────────────────────────────────────────────── */
 .dm-section {
   margin-top: 4px;
@@ -439,6 +622,7 @@ details summary {
 }
 
 .sidebar-footer-controls {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -573,6 +757,20 @@ details summary {
   scroll-behavior: smooth;
 }
 
+/* ── Letter avatar ────────────────────────────────────────────────────────── */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 700;
+  flex-shrink: 0;
+  user-select: none;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+/* ── Message layout ───────────────────────────────────────────────────────── */
 .message {
   padding: 4px 0;
 }
@@ -582,11 +780,17 @@ details summary {
   font-size: .8rem;
   background: var(--code-background);
 }
-.message-handle { font-weight: 600; color: var(--accent); grid-column: 1; grid-row: 1; }
+.message-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.message-handle { font-weight: 600; color: var(--accent); }
 .message-handle.dm-trigger { cursor: pointer; }
 .message-handle.dm-trigger:hover { text-decoration: underline; }
-.message-time { font-size: 11px; color: var(--text-muted); grid-column: 2; grid-row: 1; align-self: end; }
-.message-text { grid-column: 1 / -1; grid-row: 2; line-height: 1.5; color: var(--text-primary); word-break: break-word; overflow-wrap: anywhere; }
+.message-time { font-size: 11px; color: var(--text-muted); }
+.message-text { line-height: 1.5; color: var(--text-primary); word-break: break-word; overflow-wrap: anywhere; padding-left: 34px; }
 .message-text p { white-space: pre-wrap; margin: 0 0 4px; }
 .message-text p:last-child { margin-bottom: 0; }
 .message-text a { word-break: break-all; color: var(--accent); text-decoration: underline; }
@@ -758,6 +962,7 @@ details summary {
 }
 
 .composer[hidden] { display: none; }
+.composer[inert] { opacity: 0.4; cursor: not-allowed; }
 .composer {
   margin-top: auto;
   display: flex;
@@ -908,6 +1113,51 @@ details summary {
 }
 
 /* ── Date separator ──────────────────────────────────────────────────────── */
+.meeting-separator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.meeting-separator::before,
+.meeting-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.meeting-separator-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 0 8px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.meeting-separator-time {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Highlight flash when scrolled-to via sidebar segment click */
+@keyframes msg-highlight {
+  0%   { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  100% { background: transparent; }
+}
+.message--highlight {
+  animation: msg-highlight 1.5s ease-out forwards;
+  border-radius: 4px;
+}
+
 .date-separator {
   display: flex;
   align-items: center;
@@ -2075,3 +2325,77 @@ article.message:hover .message-hover-actions { opacity: 1; pointer-events: auto;
   cursor: pointer;
 }
 .action-sheet-item:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+
+/* ── Sidebar footer avatar button ────────────────────────────────────────── */
+.sidebar-avatar-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 50%;
+  flex-shrink: 0;
+  line-height: normal;
+  display: flex;
+}
+.sidebar-avatar-btn:hover .avatar {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Avatar editor popover ───────────────────────────────────────────────── */
+.avatar-editor {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+}
+.avatar-editor[hidden] { display: none; }
+.avatar-editor-header {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.avatar-editor-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.avatar-editor-chars {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  width: 60px;
+  text-transform: uppercase;
+}
+.avatar-editor-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.avatar-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: transform 0.1s, border-color 0.1s;
+}
+.avatar-swatch:hover { transform: scale(1.15); }
+.avatar-swatch--selected { border-color: var(--text-primary); transform: scale(1.15); }
+.avatar-editor-save { align-self: flex-start; margin-top: 2px; }

@@ -1,5 +1,5 @@
 <!-- Sidebar island: hub/channel nav + online presence -->
-<aside class="sidebar" id="sidebar" role="navigation" aria-label="Channels" island="{{base}}/client/islands/sidebar.js" data-currentChannel="{{currentChannelId}}" data-userid="{{user.user_id}}" data-vapid-key="{{vapidPublicKey}}">
+<aside class="sidebar" id="sidebar" role="navigation" aria-label="Channels" island="{{base}}/client/islands/sidebar.js" data-currentChannel="{{currentChannelId}}" data-userid="{{user.user_id}}" data-displayname="{{user.display_name}}" data-handle="{{user.handle}}" data-avatar-chars="{{avatarChars}}" data-avatar-color="{{avatarColor}}" data-vapid-key="{{vapidPublicKey}}">
   <section each="hubs" key="hub_id" class="hub-group">
     {{#each hubs}}
     <details class="hub-header" data-key="{{hub_id}}" data-visibility="{{visibility}}" data-description="{{description}}" draggable="true" open>
@@ -42,8 +42,35 @@
 
   <section class="dm-section">
     <h3 class="dm-section-title">Direct Messages</h3>
-    <ul class="dm-list" id="dm-list">
-      <!-- populated by sidebar.js via dm.list_result -->
+    <p class="dm-empty" show="dmsEmpty" style="padding:4px 8px;color:var(--text-muted);font-size:13px;margin:0">No messages yet.</p>
+    <ul class="dm-list" id="dm-list" each="dmsDisplay" key="channel_id">
+      <template>
+        <li cls="itemClass" attr="data-channel-id:channel_id; data-mention:mention">
+          <a class="dm-link channel-link" attr="href:href; data-channel-id:channel_id">
+            <span class="avatar" attr="style:avatarStyle; aria-label:avatarChars; title:displayName" text="avatarChars"></span>
+            <span class="dm-name" text="displayName"></span>
+          </a>
+        </li>
+      </template>
+    </ul>
+  </section>
+
+  <section class="meetings-section">
+    <h3 class="meetings-section-title">
+      Meetings
+      <button class="btn-new-meeting btn-icon" id="btn-new-meeting" type="button" aria-label="New meeting" title="New meeting">+</button>
+    </h3>
+    <p class="meeting-empty" show="meetingsEmpty" style="padding:4px 8px;color:var(--text-muted);font-size:13px;margin:0">No meetings yet.</p>
+    <ul class="meetings-list" id="meetings-list" each="meetingsDisplay" key="item_key">
+      <template>
+        <li cls="itemClass" attr="data-channel-id:channel_id; data-mention:mention; style:indentStyle">
+          <a class="meeting-link channel-link" attr="href:href; data-channel-id:channel_id; data-divider-msg-id:divider_msg_id">
+            <span class="meeting-child-arrow" show="isChild">↳</span>
+            <span class="meeting-name" text="name"></span>
+            <span class="meeting-ended-icon" title="Ended" show="ended_at">🔒</span>
+          </a>
+        </li>
+      </template>
     </ul>
   </section>
 
@@ -96,6 +123,8 @@
   data-seed-seq="{{seedSeq}}"
   data-seed-first-seq="{{seedFirstSeq}}"
   data-seed-has-more="{{seedHasMore}}"
+  data-meeting-ended-at="{{meetingMeta.ended_at}}"
+
 >
 
   <header class="chat-header">
@@ -105,6 +134,9 @@
       <p class="chat-topic" text="channelTopic">{{channel.topic}}</p>
     </hgroup>
     <div class="chat-header-actions">
+      <button class="btn-ghost btn-invite-meeting" id="btn-invite-meeting" aria-label="Invite to meeting" type="button" hidden>+ Invite</button>
+      <button class="btn-ghost btn-close-meeting" id="btn-close-meeting" aria-label="Close meeting" type="button" hidden>Close</button>
+      <button class="btn-ghost btn-continue-meeting" id="btn-continue-meeting" aria-label="Continue meeting" type="button" hidden>Continue →</button>
       <button class="btn-ghost btn-start-call" id="btn-start-call" aria-label="Start call" type="button">
         Start call
       </button>
@@ -135,7 +167,7 @@
   <div class="messages" id="messages" aria-live="polite" aria-label="Messages" role="log">
     <div class="load-more-sentinel" id="load-more-sentinel" aria-hidden="true" hidden></div>
     {{#each seedMessages}}
-    <article class="message" data-seq="{{seq}}" data-msg-id="{{msg_id}}" data-key="message_id" data-user-id="{{user_id}}" data-raw-text="{{raw_text}}" data-edited-at="{{edited_at}}" data-attachments="{{attachments_json}}" data-reactions="{{reactions_json}}">
+    <article class="message" data-seq="{{seq}}" data-msg-id="{{msg_id}}" data-key="message_id" data-user-id="{{user_id}}" data-raw-text="{{raw_text}}" data-edited-at="{{edited_at}}" data-attachments="{{attachments_json}}" data-reactions="{{reactions_json}}" data-kind="{{kind}}">
       <span class="message-handle" data-user-id="{{user_id}}">{{user_display_name}}</span>
       <time class="message-time" datetime="{{ts}}">{{ts_fmt}}{{#if edited_at}}<span class="message-edited">(edited)</span>{{/if}}</time>
       <div class="message-text">{{{text}}}</div>
